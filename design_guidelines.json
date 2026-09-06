@@ -1,0 +1,202 @@
+{
+  "app_name": "DATE SPARK",
+  "personality": "4 Tactile / Playful LIGHT (fused with 6 Glass / Luxe surfaces for premium feel)",
+  "personality_one_liner": "A warm, premium, and playful connection engine that turns vague intentions into magical real-world plans.",
+  "color": {
+    "surface": "#FFF9F5",
+    "onSurface": "#2B2524",
+    "surfaceSecondary": "#FFFFFF",
+    "onSurfaceSecondary": "#2B2524",
+    "surfaceTertiary": "#F2EAE5",
+    "onSurfaceTertiary": "#4A403E",
+    "surfaceInverse": "#2B2524",
+    "onSurfaceInverse": "#FFFFFF",
+    "brand": "#FF5A36",
+    "brandPrimary": "#FF5A36",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#FF7A5D",
+    "onBrandSecondary": "#FFFFFF",
+    "brandTertiary": "#FFECE8",
+    "onBrandTertiary": "#D94221",
+    "success": "#34C759",
+    "onSuccess": "#FFFFFF",
+    "warning": "#FF9500",
+    "onWarning": "#FFFFFF",
+    "error": "#FF3B30",
+    "onError": "#FFFFFF",
+    "info": "#FFECE8",
+    "onInfo": "#D94221",
+    "border": "#E8DED9",
+    "borderStrong": "#D9C9C2",
+    "divider": "#F2EAE5",
+    "muted": "#8A7975",
+    "onBrand": "#FFFFFF"
+  },
+  "typography": {
+    "displayFontFamily": "Outfit",
+    "textFontFamily": "Plus Jakarta Sans",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous spacing. Allow the UI to breathe. Thumb zone sticky CTAs must have safe-area clearance + breathing room.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": 2,
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Use glass on the bottom tab bar and sticky headers.",
+      "Use glass on the 'Spark It' bottom sheet handle and header.",
+      "Use glass over imagery for floating action buttons or 'Why we picked it' badges on Spark Cards."
+    ],
+    "dont's": [
+      "Do not use glass on standard form fields or static body content.",
+      "Do not use blur without a tinted minimum opacity backdrop."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Welcome",
+      "purpose": "Introduce the value proposition emotionally and lead into the wizard or login.",
+      "states": {
+        "loading": "Centered brand-colored spinner",
+        "empty": "N/A",
+        "error": "N/A"
+      },
+      "layout": "Full-bleed background image with vertical 3-stop gradient scrim. 'DATE SPARK ✨' wordmark at top. Value prop centered. Primary 'Create a Spark ✨' (brandPrimary) and Secondary 'Log In' (glass or transparent) buttons sticky at the bottom."
+    },
+    {
+      "name": "Spark Creation Wizard",
+      "purpose": "Collect Who, Vibe, Budget, Distance in a frictionless, step-by-step flow.",
+      "states": {
+        "loading": "Spinner on the CTA while generating sparks",
+        "empty": "N/A",
+        "error": "Toast error 'Please select an option' if trying to proceed empty."
+      },
+      "layout": "Progress bar at top. Large typography for questions. Use oversized, touchable pills/cards for options. Who (single select), Vibe (multi-select grid), Budget (segmented control or chips), Distance (slider or distinct chips). 'Continue' button sticky at the bottom inside a fixed container."
+    },
+    {
+      "name": "Spark Results Cards",
+      "purpose": "Present the 3 generated experience options.",
+      "states": {
+        "loading": "Shimmer skeletons shaped like the spark cards.",
+        "empty": "'We couldn't find the perfect Spark yet.' illustration + 'Expand My Search' CTA.",
+        "error": "'Failed to generate Sparks.' + Retry CTA."
+      },
+      "layout": "Horizontal snapping carousel (or stacked Tinder-style cards). Each card takes up 85% of screen height. Real background imagery with heavy gradient scrim at the bottom. Display title, Vibe tags, Distance, and a 'Why we picked it' frosted glass badge. 'View Spark ✨' button on the card."
+    },
+    {
+      "name": "Spark Detail",
+      "purpose": "Provide the exact itinerary, map, and actionable buttons to commit.",
+      "states": {
+        "loading": "Skeleton of the map and timeline.",
+        "empty": "N/A",
+        "error": "Error fetching details + Retry."
+      },
+      "layout": "Top 40% of the screen is a MapView. Bottom 60% is a bottom sheet containing the Itinerary Timeline (vertical dashed line connecting event nodes: 6:00 PM Coffee, 7:00 PM Walk, etc.). Sticky 'Spark It ✨' CTA at the bottom to share/commit, alongside a secondary 'Save' button."
+    },
+    {
+      "name": "Spark It Share Invitation",
+      "purpose": "A magical, shareable card to invite the other person/people.",
+      "states": {
+        "loading": "Generating invite link...",
+        "empty": "N/A",
+        "error": "Error generating link."
+      },
+      "layout": "A beautifully framed card on a tinted background (using brandTertiary or imagery). Shows the 'I found something for us. ✨' message, the Spark title, and an optional Date/Time picker (Today/Tomorrow/Weekend). Prominent 'Share Spark' CTA to trigger native share sheet."
+    },
+    {
+      "name": "My Sparks",
+      "purpose": "Archive of Saved, Created, and Completed Sparks.",
+      "states": {
+        "loading": "List skeletons.",
+        "empty": "Blank polaroid illustration with 'No sparks here yet. Go create a moment!'",
+        "error": "Error loading history."
+      },
+      "layout": "Standard top-tab or segmented control (Saved / Created / Completed). List of horizontal cards with thumbnail image on the left, title and date on the right."
+    },
+    {
+      "name": "Premium Paywall",
+      "purpose": "Upsell the 'Take Your Spark Further ✨' subscription.",
+      "states": {
+        "loading": "Verifying purchase...",
+        "empty": "N/A",
+        "error": "Payment failed toast."
+      },
+      "layout": "Hero image/abstract gradient background. Value props in a list with checkmarks (e.g., unlimited sparks, advanced filters). Large sticky 'Start Premium' button ($24.99/month, 2-week free trial). Subtle 'Maybe Later' text button below it."
+    }
+  ],
+  "images": {
+    "welcome_hero": {
+      "url": "https://images.unsplash.com/photo-1571771826307-98d0d0999028?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NjZ8MHwxfHNlYXJjaHwxfHxjb3VwbGUlMjBsYXVnaGluZyUyMHN1bnNldHxlbnwwfHx8fDE3ODg2MjEwOTl8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Couple laughing at sunset"
+    },
+    "spark_card_1": {
+      "url": "https://images.pexels.com/photos/5047002/pexels-photo-5047002.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Friends laughing at a cafe"
+    },
+    "spark_card_2": {
+      "url": "https://images.unsplash.com/photo-1688437307687-fe226bddfab1?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1ODh8MHwxfHNlYXJjaHwxfHxjb3p5JTIwZGlubmVyJTIwdGFibGV8ZW58MHx8fHwxNzg4NjIxMTEzfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Cozy dinner table setup"
+    },
+    "spark_card_3": {
+      "url": "https://images.unsplash.com/photo-1597120590849-a1d5a743d155?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzN8MHwxfHNlYXJjaHwxfHxzY2VuaWMlMjBuYXR1cmUlMjB3YWxrfGVufDB8fHx8MTc4ODYyMTA5OXww&ixlib=rb-4.1.0&q=85",
+      "alt": "Scenic nature walk"
+    },
+    "share_invite_bg": {
+      "url": "https://images.unsplash.com/photo-1508564733209-edec8a954e40?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1ODB8MHwxfHNlYXJjaHwxfHxzcGFya2xlciUyMG5pZ2h0fGVufDB8fHx8MTc4ODYyMTA5OXww&ixlib=rb-4.1.0&q=85",
+      "alt": "Sparkler lit at night"
+    },
+    "empty_state": {
+      "url": "https://images.unsplash.com/photo-1595981235830-8f54193a692f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNzl8MHwxfHNlYXJjaHwxfHxibGFuayUyMHBvbGFyb2lkfGVufDB8fHx8MTc4ODYyMTExM3ww&ixlib=rb-4.1.0&q=85",
+      "alt": "Blank polaroid on wooden surface"
+    }
+  },
+  "haptics": {
+    "wizard_selection": "impactLight",
+    "primary_button_press": "impactMedium",
+    "spark_generation_complete": "notificationSuccess",
+    "tab_switch": "selection"
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the color palette. Do NOT use blues or purples anywhere, fallback to surfaceInverse (#2B2524) for dark contrast.",
+    "Text on image rule: ALWAYS use a vertical linear-gradient scrim (transparent -> 20% surfaceInverse -> 70% surfaceInverse) between images and text (e.g., Welcome Screen, Spark Cards, Share Invite).",
+    "Wizard UI: Keep questions isolated. Decouple inputs to avoid overwhelming the user. Place a sticky 'Continue' CTA bounded to the bottom safe area.",
+    "Itinerary View: Use the MapView with an overlaid BottomSheet from @gorhom/bottom-sheet. Inside the sheet, create a vertical timeline UI component with dashed connection lines between stops.",
+    "Use Phosphor icons consistently (Filled style) for a playful, tactile feel.",
+    "Spark Visual Identity: Use the Spark (✨) prominently in buttons ('Create a Spark ✨') and ensure the brand color (#FF5A36) spotlights primary actions without drowning the UI.",
+    "Card Layouts: Ensure lists use space-between and standard gap sizes (md: 12). Cards should NOT sit perfectly flush with the screen edges; maintain consistent lg (16pt) margins."
+  ]
+}

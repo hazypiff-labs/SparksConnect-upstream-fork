@@ -1,0 +1,30 @@
+{
+  "summary": "First full test pass for Date Spark. Backend: 14/14 pytest cases pass covering /config/public, geocode, sparks generate/get/save/schedule/share/complete, /sparks/mine, /shared/{id}, /events, free limit enforcement (with X-Premium bypass), auth (signup+migrate, login, /me, duplicate email 409, wrong password 401, delete account invalidates token), admin stats+config, and non-admin 403. Frontend: full wizard flow Welcome -> Who -> Vibe -> Budget -> Distance+location -> results renders 3 spark cards, spark detail shows itinerary steps, map placeholder, save toast, Spark-It navigates to share screen with invitation card, date/time chips and both Share Spark + Copy Invitation buttons. Profile: guest -> Log In as admin@datespark.app renders Admin dashboard link -> /admin shows stats grid and config form. Google Places disabled upstream so sparks return needs_verification=true which the UI shows as 'Some venue details need verification' (expected). RevenueCat missing web API keys logs a warning (expected on web).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "admin dashboard", "issues": ["popular_relationships shows both 'partner' (from wizard key) and 'Partner' (capitalized) as separate rows because analytics aggregation is case-sensitive. Consider normalizing relationship_type case before storing/aggregating."]}
+    ],
+    "react_native_issues": [
+      {"component": "styles (multiple)", "issue": "Console warning: 'shadow*' style props are deprecated. Use 'boxShadow'. Affects react-native-web output. Not blocking."}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_datespark_backend.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "(Optional) Normalize relationship_type casing in analytics_events.props so /admin/stats popular_relationships doesn't duplicate 'partner' / 'Partner'.",
+    "(Optional) Migrate remaining `shadow*` style props to `boxShadow` to silence RN-Web deprecation warning."
+  ],
+  "critical_code_review_comments": [
+    "server.py is ~650 lines and stays readable but is approaching the 700-line split threshold; consider splitting sparks/admin/auth into modules if it grows further.",
+    "usage_for() counts documents by event=sparks_generated across the month; the returned `usage.used += 1` in generate() is only in-memory for the response and is fine, but be aware it can drift if two generations happen concurrently before the analytics insert commits."
+  ],
+  "updated_files": ["/app/backend/tests/test_datespark_backend.py"],
+  "success_rate": { "backend": "100% (14/14)", "frontend": "100% of listed flows exercised successfully" },
+  "seed_data_creation": "Ephemeral: signup tests create users then soft-delete them; free-limit test flips free_spark_limit to 0 then restores to 3. UI run created a few guest sparks (they live under a random X-Guest-ID and do not affect prod data).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend uses EXPO_PUBLIC_BACKEND_URL from frontend/.env (https://vibe-finder-75.preview.emergentagent.com). LLM generation takes ~20-40s; use timeout=120 for /api/sparks/generate. Google Places is disabled upstream, so sparks return needs_verification=true and venue=null (expected). On web, RevenueCat has no keys -- do NOT attempt a purchase test. OptionCard aria-selected is not exposed on Pressable in RN-Web so use screen navigation (waiting for next testID) as the assertion for selection, not aria-selected.",
+  "rca_of_issue": "No unresolved issues."
+}
