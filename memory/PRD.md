@@ -39,3 +39,5 @@ Build "Date Spark", a connection-and-experience planning mobile app (NOT a datin
 
 ## Android package renamed (2026-06)
 - app.json android.package = com.date_spark.myapp (was com.emergent.vibefinder.rvztki). iOS bundleIdentifier unchanged. RevenueCat Play app re-synced.
+
+## Android versionCode set to 104 (2026-06) — package com.date_spark.myapp unchanged.

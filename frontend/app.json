@@ -29,7 +29,8 @@
         "ACCESS_FINE_LOCATION",
         "READ_CALENDAR",
         "WRITE_CALENDAR"
-      ]
+      ],
+      "versionCode": 104
     },
     "web": {
       "bundler": "metro",
