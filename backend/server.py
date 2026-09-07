@@ -68,6 +68,12 @@ class LoginIn(BaseModel):
     password: str
 
 
+class AppleAuthIn(BaseModel):
+    identity_token: str
+    name: Optional[str] = Field(default=None, max_length=80)
+    email: Optional[EmailStr] = None
+
+
 class ProfileUpdate(BaseModel):
     name: Optional[str] = Field(default=None, max_length=80)
     location: Optional[dict[str, Any]] = None
@@ -210,6 +216,7 @@ async def track(event: str, ident: Identity | None, props: dict | None = None):
 async def startup():
     await db.users.create_index("email", unique=True)
     await db.users.create_index("id", unique=True)
+    await db.users.create_index("apple_sub", unique=True, sparse=True)
     await db.sparks.create_index([("owner_type", 1), ("owner_id", 1), ("created_at", -1)])
     await db.sparks.create_index("id", unique=True)
     await db.saved_sparks.create_index([("owner_type", 1), ("owner_id", 1), ("spark_id", 1)])
@@ -292,8 +299,8 @@ async def signup(data: SignupIn, x_guest_id: Annotated[str | None, Header()] = N
 @api.post("/auth/login")
 async def login(data: LoginIn, x_guest_id: Annotated[str | None, Header()] = None):
     user = await db.users.find_one({"email": data.email.lower(), "deleted_at": None}, NO_ID)
-    valid = password_hash.verify(data.password, user["password_hash"] if user else DUMMY_HASH)
-    if not user or not valid:
+    valid = password_hash.verify(data.password, user["password_hash"] if user and user.get("password_hash") else DUMMY_HASH)
+    if not user or not user.get("password_hash") or not valid:
         raise HTTPException(401, "Incorrect email or password")
     await migrate_guest(x_guest_id, user["id"])
     return {"access_token": make_token(user), "user": public_user(user)}
@@ -302,6 +309,55 @@ async def login(data: LoginIn, x_guest_id: Annotated[str | None, Header()] = Non
 @api.get("/auth/me")
 async def me(user: Annotated[dict, Depends(require_user)]):
     return public_user(user)
+
+
+APPLE_JWKS = jwt.PyJWKClient("https://appleid.apple.com/auth/keys", cache_keys=True)
+APPLE_AUDIENCES = [a.strip() for a in os.environ.get("APPLE_AUDIENCES", "").split(",") if a.strip()]
+
+
+@api.post("/auth/apple")
+async def apple_login(data: AppleAuthIn, x_guest_id: Annotated[str | None, Header()] = None):
+    try:
+        signing_key = APPLE_JWKS.get_signing_key_from_jwt(data.identity_token)
+        claims = jwt.decode(
+            data.identity_token,
+            signing_key.key,
+            algorithms=["RS256"],
+            audience=APPLE_AUDIENCES,
+            issuer="https://appleid.apple.com",
+        )
+    except Exception as exc:
+        logger.warning("Apple token rejected: %s", exc)
+        raise HTTPException(401, "Apple sign-in could not be verified")
+    apple_sub = claims["sub"]
+    token_email = (claims.get("email") or data.email or "").lower() or None
+
+    user = await db.users.find_one({"apple_sub": apple_sub, "deleted_at": None}, NO_ID)
+    if not user and token_email:
+        # Link an existing email/password account with the same verified email.
+        user = await db.users.find_one({"email": token_email, "deleted_at": None}, NO_ID)
+        if user:
+            await db.users.update_one({"id": user["id"]}, {"$set": {"apple_sub": apple_sub}})
+    if not user:
+        user = {
+            "id": str(uuid.uuid4()),
+            "name": (data.name or "").strip() or "Spark friend",
+            "email": token_email or f"apple-{apple_sub}@apple.local",
+            "apple_sub": apple_sub,
+            "password_hash": None,
+            "role": "user",
+            "location": None,
+            "subscription_status": "free",
+            "created_at": now(),
+            "deleted_at": None,
+        }
+        await db.users.insert_one(user)
+        await track("signup_completed", Identity(owner_type="user", owner_id=user["id"]), {"provider": "apple"})
+    elif data.name and user.get("name") in (None, "", "Spark friend"):
+        await db.users.update_one({"id": user["id"]}, {"$set": {"name": data.name.strip()}})
+        user["name"] = data.name.strip()
+    await migrate_guest(x_guest_id, user["id"])
+    return {"access_token": make_token(user), "user": public_user(user)}
 
 
 @api.put("/users/me")

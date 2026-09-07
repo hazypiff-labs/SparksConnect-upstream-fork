@@ -13,6 +13,7 @@ type Session = {
   identityError: string | null;
   login: (email: string, password: string) => Promise<User>;
   signup: (name: string, email: string, password: string) => Promise<User>;
+  appleLogin: (identityToken: string, name: string | null, email: string | null) => Promise<User>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
   deleteAccount: () => Promise<void>;
@@ -94,11 +95,16 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     return data.user;
   };
 
-  const login = useCallback(async (email: string, password: string) => afterAuth(await api("/auth/login", { method: "POST", json: { email, password } })), []);
+  const login = useCallback(async (email: string, password: string) => afterAuth(await api("/auth/login", { method: "POST", json: { email, password } })), []); // eslint-disable-line react-hooks/exhaustive-deps
   const signup = useCallback(async (name: string, email: string, password: string) => {
     track("signup_started");
     return afterAuth(await api("/auth/signup", { method: "POST", json: { name, email, password } }));
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const appleLogin = useCallback(async (identityToken: string, name: string | null, email: string | null) => {
+    track("signup_started", { provider: "apple" });
+    return afterAuth(await api("/auth/apple", { method: "POST", json: { identity_token: identityToken, name, email } }));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const logout = useCallback(async () => {
     await setToken(null);
@@ -112,7 +118,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   }, [logout]);
 
   return (
-    <Ctx.Provider value={{ user, ready, isPremium, isAdmin, identityError, login, signup, logout, refresh, deleteAccount }}>
+    <Ctx.Provider value={{ user, ready, isPremium, isAdmin, identityError, login, signup, appleLogin, logout, refresh, deleteAccount }}>
       {children}
     </Ctx.Provider>
   );

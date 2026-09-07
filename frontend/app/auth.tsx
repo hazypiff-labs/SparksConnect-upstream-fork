@@ -1,5 +1,6 @@
-import React, { useState } from "react";
-import { Pressable, Text, TextInput, View } from "react-native";
+import React, { useEffect, useState } from "react";
+import { Platform, Pressable, Text, TextInput, View } from "react-native";
+import * as AppleAuthentication from "expo-apple-authentication";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -25,6 +26,10 @@ const useStyles = makeStyles((c) => ({
   input: { height: 52, borderRadius: radius.md, borderWidth: 1, borderColor: c.border, paddingHorizontal: spacing.lg, fontFamily: fonts.text, fontSize: 16, color: c.onSurface, backgroundColor: c.surfaceSecondary },
   error: { fontFamily: fonts.text, fontSize: 13, color: c.error, fontWeight: "600" },
   note: { fontFamily: fonts.text, fontSize: 13, color: c.muted, lineHeight: 19, textAlign: "center" },
+  dividerRow: { flexDirection: "row", alignItems: "center", gap: spacing.md },
+  dividerLine: { flex: 1, height: 1, backgroundColor: c.divider },
+  dividerText: { fontFamily: fonts.text, fontSize: 13, color: c.muted, fontWeight: "600" },
+  appleButton: { height: 52, width: "100%" },
 }));
 
 export default function Auth() {
@@ -34,7 +39,33 @@ export default function Auth() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const toast = useToast();
-  const { login, signup } = useSession();
+  const { login, signup, appleLogin } = useSession();
+  const [appleAvailable, setAppleAvailable] = useState(false);
+  const [appleBusy, setAppleBusy] = useState(false);
+  useEffect(() => {
+    if (Platform.OS === "ios") AppleAuthentication.isAvailableAsync().then(setAppleAvailable).catch(() => setAppleAvailable(false));
+  }, []);
+
+  const signInWithApple = async () => {
+    setError(null);
+    setAppleBusy(true);
+    try {
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [AppleAuthentication.AppleAuthenticationScope.FULL_NAME, AppleAuthentication.AppleAuthenticationScope.EMAIL],
+      });
+      if (!credential.identityToken) throw new Error("Apple didn’t return a sign-in token");
+      const fullName = [credential.fullName?.givenName, credential.fullName?.familyName].filter(Boolean).join(" ") || null;
+      const user = await appleLogin(credential.identityToken, fullName, credential.email ?? null);
+      toast.show(`Welcome, ${user.name.split(" ")[0]} ✨`, "success");
+      if (router.canGoBack()) router.back();
+      else router.replace("/(tabs)/home");
+    } catch (e: any) {
+      if (e?.code === "ERR_REQUEST_CANCELED") return;
+      setError(e?.message ?? "Apple sign-in failed");
+    } finally {
+      setAppleBusy(false);
+    }
+  };
   const [mode, setMode] = useState<"login" | "signup">(params.mode === "signup" ? "signup" : "login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -95,7 +126,24 @@ export default function Auth() {
           <TextInput testID="auth-password-input" style={s.input} value={password} onChangeText={setPassword} placeholder={mode === "signup" ? "At least 8 characters" : "Your password"} placeholderTextColor={colors.muted} secureTextEntry textContentType={mode === "signup" ? "newPassword" : "password"} returnKeyType="go" onSubmitEditing={submit} />
         </View>
         {error ? <Text style={s.error} testID="auth-error">{error}</Text> : null}
-        <Text style={s.note}>Google and Apple sign-in are coming soon. We only store what’s needed to keep your Sparks.</Text>
+        {appleAvailable ? (
+          <View style={{ gap: spacing.lg }} testID="apple-signin-section">
+            <View style={s.dividerRow}>
+              <View style={s.dividerLine} />
+              <Text style={s.dividerText}>or</Text>
+              <View style={s.dividerLine} />
+            </View>
+            <AppleAuthentication.AppleAuthenticationButton
+              testID="apple-signin-button"
+              buttonType={mode === "login" ? AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN : AppleAuthentication.AppleAuthenticationButtonType.SIGN_UP}
+              buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+              cornerRadius={26}
+              style={[s.appleButton, appleBusy && { opacity: 0.6 }]}
+              onPress={appleBusy ? () => {} : signInWithApple}
+            />
+          </View>
+        ) : null}
+        <Text style={s.note}>{appleAvailable ? "Google sign-in is coming soon." : "Apple sign-in is available on iPhone; Google is coming soon."} We only store what’s needed to keep your Sparks.</Text>
       </KeyboardAwareScrollView>
       <KeyboardStickyView>
         <StickyFooter>

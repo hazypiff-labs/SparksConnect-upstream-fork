@@ -26,6 +26,7 @@ Build "Date Spark", a connection-and-experience planning mobile app (NOT a datin
 - Admin dashboard: users, active, generated/saved/shared/completed, premium, MRR, conversion, generate→share rate, popular relationships/vibes/locations/experiences; config for free limit, price (display), trial days, promo message, AI guidance, featured experiences
 - Analytics events: app_opened, signup_started/completed, spark_started, relationship/vibe/budget/location_selected, sparks_generated, spark_viewed/saved/shared/completed, premium_viewed, subscription_started
 - Empty/error state with Expand / Lower budget / Increase distance / Different vibe
+- Sign in with Apple (2026-06): native Apple button on iOS (`expo-apple-authentication`), backend `POST /api/auth/apple` verifies identity token against Apple JWKS (aud = bundle id + host.exp.Exponent), users keyed by `apple_sub`, links existing email accounts, guest Sparks migrate. Requires iOS device / build to exercise the button.
 - Tested: backend 14/14, frontend flows pass (iteration 1)
 
 ## Backlog
