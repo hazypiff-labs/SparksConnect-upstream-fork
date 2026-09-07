@@ -50,6 +50,15 @@ export const IMAGES = {
     "https://images.unsplash.com/photo-1595981235830-8f54193a692f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNzl8MHwxfHNlYXJjaHwxfHxibGFuayUyMHBvbGFyb2lkfGVufDB8fHx8MTc4ODYyMTExM3ww&ixlib=rb-4.1.0&q=85",
 };
 
+export const OCCASIONS = [
+  { key: "anniversary", label: "Anniversary", emoji: "💍" },
+  { key: "birthday", label: "Birthday", emoji: "🎂" },
+  { key: "celebration", label: "Celebration", emoji: "🥂" },
+  { key: "first-date", label: "First Date", emoji: "🌹" },
+  { key: "make-up", label: "Make-up Date", emoji: "🕊️" },
+  { key: "just-because", label: "Just Because", emoji: "🎈" },
+];
+
 export const PREMIUM_FEATURES = [
   "Unlimited Sparks every month",
   "Advanced personalization",

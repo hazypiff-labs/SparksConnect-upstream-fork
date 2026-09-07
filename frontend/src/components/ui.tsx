@@ -201,7 +201,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     <ToastContext.Provider value={{ show }}>
       {children}
       {toast ? (
-        <View pointerEvents="none" style={[s.wrap, { top: insets.top + spacing.md }]}>
+        <View style={[s.wrap, { top: insets.top + spacing.md, pointerEvents: "none" }]}>
           <Animated.View key={toast.id} entering={FadeInDown.duration(260)} exiting={FadeOutUp.duration(200)} style={s.toast} testID="toast-message">
             <Ionicons name={iconName} size={18} color={iconColor} />
             <Text style={s.text}>{toast.message}</Text>

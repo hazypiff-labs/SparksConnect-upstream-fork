@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 2 (Date Spark) - Google auth session, Invitations, Occasion planning, Surprise Sparks. Backend: 8/8 new pytest cases pass (POST /auth/session with bogus id → 401; premium+occasion+surprise generation returns 3 sparks with surprise=true, revealed_steps=1, dress_code string, occasion='anniversary'; non-owner GET returns locked_for_recipient=true, activities=[], meet_place present, is_owner=false; owner GET returns is_owner=true, full activities; PUT /sparks/{id}/reveal owner increments revealed_steps and non-owner returns 404; POST /sparks/{id}/share with share_url + past scheduled_at → invitation contains the share_url and 'Dress code', afterwards non-owner sees full activities; GET /shared/{id} applies same redaction for un-scheduled surprise sparks and reveals plan once scheduled_at is in the past). Frontend: /auth shows 'Continue with Google' (google-signin-button) and NO apple-signin-button on web. Logged in as admin → Create tab: occasion-chip-row visible; tap occasion-anniversary while premium keeps the user on the who-screen with chip selected. Full wizard Partner → Romantic vibe → $25-$50 budget → 10 miles distance completed. surprise-toggle-card + surprise-switch visible; toggled on. location-input Austin, TX + Set worked (label appeared). Find My Sparks → results header 'Your Surprise Sparks 🎁'; 3 cards rendered. Spark detail: surprise-card + surprise-dress-code (Dress code shown) + reveal-next-button 'Reveal stop 2 of 3 🎁' → tap → 'Reveal stop 3 of 3 🎁' and toast 'Stop 2 unlocked'. spark-occasion text = 'For: Anniversary'. Share screen shows 'SEND THE SURPRISE' header; Tomorrow + 6:00 PM → invitation-when '📅 Tue, Sep 8, 6:00 PM'; share-add-calendar-button visible and tappable (web toast); Copy Invitation → 'Invitation copied ✨' toast. Non-owner (fresh localStorage) opening /spark/{id} directly sees invite-banner + surprise-card ('A mystery plan, just for you') + no itinerary + footer 'I'm in! 🎉' (invite-footer-button); tapping invite-accept-button toasts \"You're in! Saved to My Sparks 🎉\" and opens auth Sign Up screen. Non-premium guest on Create tapping occasion-birthday routes to /premium (premium-screen visible with reason=occasion); Maybe Later returns to Create. No React Native red screens observed. Deprecated packages detected: none.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "app/create/budget.tsx Pressable rows", "issue": "budget-option-* Pressables do NOT respond to real mouse click on RN-Web — the OnPress handler never fires with page.click() or a synthetic mouse click at the row's bbox center; only a manually dispatched PointerEvent (pointerdown+pointerup) triggers selection. Other Pressables in the wizard (who-option-*, vibe-option-*, distance-option-*, occasion-*) work with normal clicks, so this is specific to budget.tsx. Users on web/desktop can still touch-tap on a touchscreen but a mouse click leaves Continue disabled forever. Likely related to the 'props.pointerEvents is deprecated' warning triggered on that screen — pointer-events may be blocked by the Animated.View parent's style. Reference: /app/frontend/app/create/budget.tsx:40-53", "testID": "budget-option-25-50", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "spark/[id] invite-banner", "issues": ["Banner reads 'Someone wants to spend time with you ✨' — the spec asked for a 'YOU'RE INVITED' banner. Wording is friendlier but does not include the literal 'YOU'RE INVITED' string. Non-blocking, just callout."]}
+    ],
+    "react_native_issues": [
+      {"component": "props.pointerEvents (multiple screens incl. budget)", "issue": "Console warning: 'props.pointerEvents is deprecated. Use style.pointerEvents.' In react-native-web this can cause the parent to swallow pointer events on descendants — see the budget UI bug above. Reference: /app/frontend/app/create/budget.tsx and any component still passing pointerEvents as a prop."},
+      {"component": "styles (multiple)", "issue": "Console warning: '\"shadow*\" style props are deprecated. Use \"boxShadow\".' Not blocking. Same as iteration 1."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_datespark_backend.py",
+    "/app/backend/tests/test_datespark_iteration2.py",
+    "/app/test_reports/pytest/iteration2_results.xml"
+  ],
+  "action_items": [
+    "Investigate why <Pressable> inside <Animated.View> on /create/budget swallows real mouse clicks in RN-Web. Likely fix: remove any `pointerEvents` prop from the Animated.View parent (or move it into style.pointerEvents) so the child Pressable receives clicks. Verify Continue enables after a normal click. Same guidance applies to any other screen still using `props.pointerEvents`.",
+    "(Optional) Align invite banner copy with spec — if 'YOU'RE INVITED' is the intended header, add it as a small caps label above the current friendly line.",
+    "(Optional) Migrate remaining `shadow*` style props to `boxShadow` to silence RN-Web deprecation warnings."
+  ],
+  "critical_code_review_comments": [
+    "server.py still growing (~820 lines). Consider splitting auth/sparks/admin into modules soon; iteration 2 added the surprise-redaction helpers and /sparks/{id}/reveal which pushed it past the 700-line threshold."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_datespark_iteration2.py"
+  ],
+  "success_rate": {
+    "backend": "100% (8/8 new + 14/14 iter1 unchanged)",
+    "frontend": "12/13 listed flows pass; only budget-option Pressable does not respond to a plain mouse click on web (workaround: PointerEvent dispatch)"
+  },
+  "seed_data_creation": "Ephemeral: created two throwaway guest identities in Mongo (OWNER_GUEST + OTHER_GUEST) with 3 generated surprise sparks each run. No persistent test users beyond admin were created.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend URL: EXPO_PUBLIC_BACKEND_URL=https://vibe-finder-75.preview.emergentagent.com. LLM generation with surprise+occasion takes ~30-60s, use timeout ≥180s. To exercise the budget step in Playwright on web, dispatch pointerdown+pointerup+click via page.evaluate — page.click() alone does not fire onPress in that screen. Session state (isPremium) is only ready ~3-4s after login; wait after page.goto('/create') before tapping premium-gated UI. Non-owner guest identity is per-browser (localStorage 'guest_id'); clear localStorage to simulate a recipient viewing the invitation link.",
+  "rca_of_issue": "Budget step click regression: the Pressable in /app/frontend/app/create/budget.tsx sits inside an Animated.View from react-native-reanimated. RN-Web currently prints 'props.pointerEvents is deprecated. Use style.pointerEvents' — the deprecated pointerEvents prop on that parent (or on a StickyFooter/ScrollView ancestor) can cause react-native-web to render pointer-events:none on the wrapper, so mouse/touch events never reach the inner Pressable. Reproduce: on desktop web, click any $ row on /create/budget — nothing happens, Continue stays disabled. Mitigation: replace `pointerEvents` prop usage with style.pointerEvents (or remove entirely) on the ancestors of that Pressable, or wrap it in a plain <View style={{ pointerEvents: 'auto' }}> as an escape hatch."
+}

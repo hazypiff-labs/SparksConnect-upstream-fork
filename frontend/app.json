@@ -12,7 +12,9 @@
       "bundleIdentifier": "com.emergent.vibefinder.rvztki",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Find experiences and venues near you",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCalendarsFullAccessUsageDescription": "Add your planned Spark to your calendar with a reminder",
+        "NSCalendarsWriteOnlyAccessUsageDescription": "Add your planned Spark to your calendar with a reminder"
       },
       "usesAppleSignIn": true
     },
@@ -24,7 +26,9 @@
       "package": "com.emergent.vibefinder.rvztki",
       "permissions": [
         "ACCESS_COARSE_LOCATION",
-        "ACCESS_FINE_LOCATION"
+        "ACCESS_FINE_LOCATION",
+        "READ_CALENDAR",
+        "WRITE_CALENDAR"
       ]
     },
     "web": {
@@ -55,7 +59,13 @@
           "locationWhenInUsePermission": "Find experiences and venues near you"
         }
       ],
-      "expo-apple-authentication"
+      "expo-apple-authentication",
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "Add your planned Spark to your calendar with a reminder"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

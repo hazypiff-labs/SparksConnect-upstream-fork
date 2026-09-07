@@ -64,11 +64,12 @@ Return ONLY valid JSON (no markdown) with this exact shape:
   "estimated_cost": "$35–$50",
   "estimated_duration": "2.5 hours",
   "why": "1-2 sentences on why this fits this person + preferences",
+  "dress_code": "only when SURPRISE mode: short dress-code hint, otherwise null",
   "activities": [
     {"name":"Coffee","venue_id":"<id or null>","start_time":"6:00 PM","end_time":"7:00 PM","estimated_cost":"$12","note":"short tip"}
   ]
 }]}
-Produce exactly 3 sparks, each with 2-4 activities in chronological order."""
+Produce exactly 3 sparks. Normal mode: 2-4 activities each. OCCASION mode: 3-5 activities with occasion-specific touches (a toast, a keepsake, a photo moment, a meaningful closing stop). SURPRISE mode: the first activity is the meeting point (clear time + place); the description must be a teaser that does not spoil later stops; include a dress_code. Activities always in chronological order."""
 
 
 def _slug_query_list(vibes: list[str]) -> list[str]:
@@ -137,6 +138,8 @@ async def generate_sparks(
     date_label: str | None,
     time_label: str | None,
     ai_settings: dict[str, Any],
+    occasion: str | None = None,
+    surprise: bool = False,
 ) -> list[dict]:
     radius_miles = {"5": 5, "10": 10, "25": 25, "anywhere": 60}.get(str(distance), 10)
     lat, lng = location.get("lat"), location.get("lng")
@@ -158,6 +161,8 @@ async def generate_sparks(
         "avoid_experience_types": history.get("recent_types", [])[:6],
         "admin_guidance": ai_settings.get("guidance", ""),
         "venues_available": bool(venues),
+        "occasion": occasion or None,
+        "mode": "SURPRISE" if surprise else ("OCCASION" if occasion else "NORMAL"),
     }
     prompt = (
         "CONTEXT:\n" + json.dumps(context, ensure_ascii=False)
@@ -215,6 +220,7 @@ async def generate_sparks(
                 "estimated_cost": s.get("estimated_cost") or BUDGET_TEXT.get(budget, budget),
                 "estimated_duration": s.get("estimated_duration") or "2 hours",
                 "why": s.get("why") or "",
+                "dress_code": (s.get("dress_code") or None) if surprise else None,
                 "activities": activities,
                 "location_label": first_venue["address"] if first_venue else (location.get("label") or "Your area"),
                 "distance_miles": distance_miles,

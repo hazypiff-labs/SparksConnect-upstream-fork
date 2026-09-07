@@ -75,6 +75,7 @@ export type Activity = {
   external_url: string | null;
   note: string | null;
   verified: boolean;
+  locked?: boolean;
 };
 
 export type Spark = {
@@ -100,6 +101,14 @@ export type Spark = {
   distance: string;
   date_label: string | null;
   time_label: string | null;
+  scheduled_at: string | null;
+  occasion: string | null;
+  surprise: boolean;
+  revealed_steps: number;
+  dress_code: string | null;
+  locked_for_recipient?: boolean;
+  meet_time?: string | null;
+  meet_place?: string | null;
   status: string;
   saved: boolean;
   is_owner?: boolean;

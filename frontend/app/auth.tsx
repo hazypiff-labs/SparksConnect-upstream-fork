@@ -39,7 +39,7 @@ export default function Auth() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const toast = useToast();
-  const { login, signup, appleLogin } = useSession();
+  const { login, signup, appleLogin, googleLogin, googleBusy, identityError } = useSession();
   const [appleAvailable, setAppleAvailable] = useState(false);
   const [appleBusy, setAppleBusy] = useState(false);
   useEffect(() => {
@@ -126,13 +126,22 @@ export default function Auth() {
           <TextInput testID="auth-password-input" style={s.input} value={password} onChangeText={setPassword} placeholder={mode === "signup" ? "At least 8 characters" : "Your password"} placeholderTextColor={colors.muted} secureTextEntry textContentType={mode === "signup" ? "newPassword" : "password"} returnKeyType="go" onSubmitEditing={submit} />
         </View>
         {error ? <Text style={s.error} testID="auth-error">{error}</Text> : null}
-        {appleAvailable ? (
-          <View style={{ gap: spacing.lg }} testID="apple-signin-section">
-            <View style={s.dividerRow}>
-              <View style={s.dividerLine} />
-              <Text style={s.dividerText}>or</Text>
-              <View style={s.dividerLine} />
-            </View>
+        {identityError && !error ? <Text style={s.error} testID="auth-identity-error">{identityError}</Text> : null}
+        <View style={{ gap: spacing.lg }} testID="social-signin-section">
+          <View style={s.dividerRow}>
+            <View style={s.dividerLine} />
+            <Text style={s.dividerText}>or continue with</Text>
+            <View style={s.dividerLine} />
+          </View>
+          <Button
+            title="Continue with Google"
+            variant="inverse"
+            testID="google-signin-button"
+            loading={googleBusy}
+            onPress={() => googleLogin().catch((e: Error) => setError(e.message))}
+            icon={<Ionicons name="logo-google" size={18} color={colors.onSurfaceInverse} />}
+          />
+          {appleAvailable ? (
             <AppleAuthentication.AppleAuthenticationButton
               testID="apple-signin-button"
               buttonType={mode === "login" ? AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN : AppleAuthentication.AppleAuthenticationButtonType.SIGN_UP}
@@ -141,9 +150,9 @@ export default function Auth() {
               style={[s.appleButton, appleBusy && { opacity: 0.6 }]}
               onPress={appleBusy ? () => {} : signInWithApple}
             />
-          </View>
-        ) : null}
-        <Text style={s.note}>{appleAvailable ? "Google sign-in is coming soon." : "Apple sign-in is available on iPhone; Google is coming soon."} We only store what’s needed to keep your Sparks.</Text>
+          ) : null}
+        </View>
+        <Text style={s.note}>{appleAvailable ? "" : "Apple sign-in is available on iPhone. "}We only store what’s needed to keep your Sparks.</Text>
       </KeyboardAwareScrollView>
       <KeyboardStickyView>
         <StickyFooter>

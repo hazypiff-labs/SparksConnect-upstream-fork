@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Linking, Pressable, Text, TextInput, View } from "react-native";
+import { Linking, Pressable, Switch, Text, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 import * as Location from "expo-location";
 import * as Haptics from "expo-haptics";
@@ -9,6 +9,7 @@ import { KeyboardAwareScrollView, KeyboardStickyView } from "react-native-keyboa
 import { api, track } from "@/src/api";
 import { Button, StepHeader, StickyFooter, useToast } from "@/src/components/ui";
 import { DISTANCES } from "@/src/constants";
+import { useSession } from "@/src/session";
 import { fonts, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { useWizard } from "@/src/wizard";
 
@@ -31,6 +32,9 @@ const useStyles = makeStyles((c) => ({
   smallBtnText: { fontFamily: fonts.text, fontSize: 14, fontWeight: "700", color: c.onSurfaceInverse },
   linkBtn: { flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start", minHeight: 44 },
   linkText: { fontFamily: fonts.text, fontSize: 14, fontWeight: "700", color: c.brandPrimary },
+  surprise: { backgroundColor: c.surfaceInverse, borderRadius: radius.lg, padding: spacing.lg, flexDirection: "row", alignItems: "center", gap: spacing.md },
+  surpriseTitle: { fontFamily: fonts.display, fontSize: 16, fontWeight: "700", color: c.onSurfaceInverse },
+  surpriseSub: { fontFamily: fonts.text, fontSize: 13, color: c.onSurfaceInverse, opacity: 0.85, lineHeight: 18, marginTop: 2 },
 }));
 
 export default function DistanceStep() {
@@ -39,7 +43,16 @@ export default function DistanceStep() {
   const router = useRouter();
   const toast = useToast();
   const { draft, update } = useWizard();
+  const { isPremium } = useSession();
   const [manual, setManual] = useState("");
+
+  const toggleSurprise = (on: boolean) => {
+    if (on && !isPremium) {
+      track("premium_viewed", { reason: "surprise" });
+      return router.push({ pathname: "/premium", params: { reason: "surprise" } });
+    }
+    update({ surprise: on });
+  };
   const [locating, setLocating] = useState(false);
   const [geocoding, setGeocoding] = useState(false);
   const [blocked, setBlocked] = useState(false);
@@ -154,6 +167,15 @@ export default function DistanceStep() {
             </Pressable>
           </View>
         </View>
+
+        <Pressable testID="surprise-toggle-card" style={s.surprise} onPress={() => toggleSurprise(!draft.surprise)}>
+          <Text style={{ fontSize: 28 }}>🎁</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={s.surpriseTitle}>Surprise Spark {isPremium ? "" : "· Premium ✨"}</Text>
+            <Text style={s.surpriseSub}>Plan a mystery date. You unlock stops one at a time; they only get the meeting point and a dress code.</Text>
+          </View>
+          <Switch testID="surprise-switch" value={draft.surprise} onValueChange={toggleSurprise} trackColor={{ true: colors.brandPrimary, false: colors.borderStrong }} thumbColor={colors.surfaceSecondary} />
+        </Pressable>
       </KeyboardAwareScrollView>
       <KeyboardStickyView>
         <StickyFooter>

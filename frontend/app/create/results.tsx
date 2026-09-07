@@ -54,6 +54,8 @@ export default function Results() {
           distance: draft.distance,
           location: draft.location,
           exclude_titles: draft.seenTitles,
+          occasion: draft.occasion,
+          surprise: draft.surprise,
         },
       }),
     onSuccess: (data) => {
@@ -93,7 +95,7 @@ export default function Results() {
           <Ionicons name="chevron-back" size={22} color={colors.onSurface} />
         </Pressable>
         <View style={{ flex: 1 }}>
-          <Text style={s.title}>Your Sparks ✨</Text>
+          <Text style={s.title}>{draft.surprise ? "Your Surprise Sparks 🎁" : "Your Sparks ✨"}</Text>
           <Text style={s.sub} numberOfLines={1}>{summary}</Text>
         </View>
       </View>

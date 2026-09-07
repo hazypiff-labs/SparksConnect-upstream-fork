@@ -10,12 +10,14 @@ export type Draft = {
   budget: string | null;
   distance: string | null;
   location: Location;
+  occasion: string | null;
+  surprise: boolean;
   results: Spark[];
   seenTitles: string[];
   usage: { used: number; limit: number } | null;
 };
 
-const initial: Draft = { relationship: null, vibes: [], budget: null, distance: null, location: null, results: [], seenTitles: [], usage: null };
+const initial: Draft = { relationship: null, vibes: [], budget: null, distance: null, location: null, occasion: null, surprise: false, results: [], seenTitles: [], usage: null };
 
 type WizardCtx = { draft: Draft; update: (patch: Partial<Draft>) => void; reset: () => void };
 const Ctx = createContext<WizardCtx | null>(null);

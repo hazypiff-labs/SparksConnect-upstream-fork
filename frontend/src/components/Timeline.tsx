@@ -13,6 +13,7 @@ const useStyles = makeStyles((c) => ({
   dot: { width: 14, height: 14, borderRadius: 7, backgroundColor: c.brandPrimary, borderWidth: 3, borderColor: c.brandTertiary, marginTop: 2 },
   line: { flex: 1, width: 0, borderLeftWidth: 2, borderColor: c.borderStrong, borderStyle: "dashed", marginVertical: 4 },
   card: { flex: 1, backgroundColor: c.surfaceSecondary, borderRadius: radius.md, padding: spacing.lg, marginBottom: spacing.lg, borderWidth: 1, borderColor: c.border, gap: 4 },
+  lockedCard: { backgroundColor: c.surfaceTertiary, borderStyle: "dashed" },
   name: { fontFamily: fonts.display, fontSize: 17, fontWeight: "700", color: c.onSurface },
   venue: { fontFamily: fonts.text, fontSize: 14, color: c.onSurfaceSecondary, fontWeight: "600" },
   address: { fontFamily: fonts.text, fontSize: 13, color: c.muted },
@@ -32,13 +33,20 @@ export function Timeline({ activities }: { activities: Activity[] }) {
       {activities.map((a, i) => (
         <View key={i} style={s.row} testID={`itinerary-step-${i}`}>
           <View style={s.timeCol}>
-            <Text style={s.time}>{a.start_time ?? ""}</Text>
+            <Text style={s.time}>{a.locked ? "?" : a.start_time ?? ""}</Text>
           </View>
           <View style={s.lineCol}>
             <View style={s.dot} />
             {i < activities.length - 1 ? <View style={s.line} /> : null}
           </View>
-          <View style={s.card}>
+          <View style={[s.card, a.locked && s.lockedCard]}>
+            {a.locked ? (
+              <>
+                <Text style={s.name}>🔒 {a.activity_name}</Text>
+                <Text style={s.note}>Revealed when you’re ready — keep the mystery alive.</Text>
+              </>
+            ) : (
+              <>
             <Text style={s.name}>{a.activity_name}</Text>
             {a.venue ? <Text style={s.venue}>{a.venue}</Text> : null}
             {a.address ? <Text style={s.address}>{a.address}</Text> : null}
@@ -55,6 +63,8 @@ export function Timeline({ activities }: { activities: Activity[] }) {
                 <Text style={s.linkText}>Open in Google Maps</Text>
               </Pressable>
             ) : null}
+              </>
+            )}
           </View>
         </View>
       ))}

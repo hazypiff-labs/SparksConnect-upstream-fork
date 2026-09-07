@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any, Optional
 
+import httpx
 import jwt
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
@@ -101,11 +102,19 @@ class GenerateIn(BaseModel):
     exclude_titles: list[str] = []
     date_label: Optional[str] = None
     time_label: Optional[str] = None
+    occasion: Optional[str] = None
+    surprise: bool = False
 
 
 class ScheduleIn(BaseModel):
     date_label: Optional[str] = None
     time_label: Optional[str] = None
+    scheduled_at: Optional[str] = None
+    share_url: Optional[str] = None
+
+
+class SessionIn(BaseModel):
+    session_id: str
 
 
 class EventIn(BaseModel):
@@ -315,6 +324,47 @@ APPLE_JWKS = jwt.PyJWKClient("https://appleid.apple.com/auth/keys", cache_keys=T
 APPLE_AUDIENCES = [a.strip() for a in os.environ.get("APPLE_AUDIENCES", "").split(",") if a.strip()]
 
 
+@api.post("/auth/session")
+async def google_session(data: SessionIn, x_guest_id: Annotated[str | None, Header()] = None):
+    """Exchange the one-time Emergent Google Auth session_id for our own JWT."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as http:
+            resp = await http.get(
+                "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
+                headers={"X-Session-ID": data.session_id},
+            )
+    except Exception as exc:
+        logger.warning("Emergent auth unreachable: %s", exc)
+        raise HTTPException(401, "Google sign-in could not be verified")
+    if resp.status_code != 200:
+        raise HTTPException(401, "Google sign-in expired or invalid. Please try again.")
+    info = resp.json()
+    email = (info.get("email") or "").lower()
+    if not email:
+        raise HTTPException(401, "Google did not return an email")
+    user = await db.users.find_one({"email": email, "deleted_at": None}, NO_ID)
+    if not user:
+        user = {
+            "id": str(uuid.uuid4()),
+            "name": (info.get("name") or email.split("@")[0]).strip(),
+            "email": email,
+            "picture": info.get("picture"),
+            "google_linked": True,
+            "password_hash": None,
+            "role": "user",
+            "location": None,
+            "subscription_status": "free",
+            "created_at": now(),
+            "deleted_at": None,
+        }
+        await db.users.insert_one(user)
+        await track("signup_completed", Identity(owner_type="user", owner_id=user["id"]), {"provider": "google"})
+    else:
+        await db.users.update_one({"id": user["id"]}, {"$set": {"google_linked": True, "picture": info.get("picture") or user.get("picture")}})
+    await migrate_guest(x_guest_id, user["id"])
+    return {"access_token": make_token(user), "session_token": make_token(user), "user": public_user(user)}
+
+
 @api.post("/auth/apple")
 async def apple_login(data: AppleAuthIn, x_guest_id: Annotated[str | None, Header()] = None):
     try:
@@ -481,6 +531,8 @@ async def generate(
             history=history,
             date_label=data.date_label,
             time_label=data.time_label,
+            occasion=data.occasion,
+            surprise=data.surprise,
             ai_settings=cfg.get("ai_settings", {}),
         )
     except Exception as exc:
@@ -504,6 +556,10 @@ async def generate(
                 "location": data.location,
                 "date_label": data.date_label,
                 "time_label": data.time_label,
+                "scheduled_at": None,
+                "occasion": data.occasion,
+                "surprise": data.surprise,
+                "revealed_steps": 1 if data.surprise else len(s.get("activities", [])),
                 "status": "generated",
                 "share_count": 0,
                 "created_at": now(),
@@ -515,7 +571,7 @@ async def generate(
     await track(
         "sparks_generated",
         ident,
-        {"relationship_type": data.relationship_type.lower(), "vibes": data.vibes, "budget": data.budget, "distance": data.distance, "location": data.location.get("label"), "titles": [d["title"] for d in docs]},
+        {"relationship_type": data.relationship_type.lower(), "vibes": data.vibes, "budget": data.budget, "distance": data.distance, "location": data.location.get("label"), "occasion": data.occasion, "surprise": data.surprise, "titles": [d["title"] for d in docs]},
     )
     usage["used"] += 1
     return {"sparks": [serialize_spark(d, set()) for d in docs], "usage": usage}
@@ -542,6 +598,40 @@ async def my_sparks(ident: Annotated[Identity, Depends(identity)]):
     }
 
 
+def surprise_unlocked(s: dict) -> bool:
+    """A surprise plan is visible to the recipient once its scheduled time has passed, it's fully revealed, or completed."""
+    if not s.get("surprise"):
+        return True
+    if s.get("completed_at") or s.get("revealed_steps", 0) >= len(s.get("activities", [])):
+        return True
+    sched = s.get("scheduled_at")
+    if sched:
+        try:
+            dt = datetime.fromisoformat(sched.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return now() >= dt
+        except ValueError:
+            return False
+    return False
+
+
+def redact_for_recipient(out: dict) -> dict:
+    """Recipient of a surprise Spark only learns when/where to meet and the dress code."""
+    if not out.get("surprise") or surprise_unlocked(out):
+        out["locked_for_recipient"] = False
+        return out
+    first = (out.get("activities") or [{}])[0]
+    out["activities"] = []
+    out["description"] = "It’s a surprise. All you need to know is when and where to meet ✨"
+    out["why"] = ""
+    out["tagline"] = "A mystery plan, just for you"
+    out["meet_time"] = first.get("start_time")
+    out["meet_place"] = first.get("address") or out.get("location_label")
+    out["locked_for_recipient"] = True
+    return out
+
+
 @api.get("/sparks/{spark_id}")
 async def get_spark(spark_id: str, ident: Annotated[Identity | None, Depends(identity)] = None):
     s = await db.sparks.find_one({"id": spark_id}, NO_ID)
@@ -553,6 +643,8 @@ async def get_spark(spark_id: str, ident: Annotated[Identity | None, Depends(ide
         await track("spark_viewed", ident, {"spark_id": spark_id, "title": s["title"]})
     out = serialize_spark(s, {spark_id} if saved else set())
     out["is_owner"] = bool(ident and s["owner_type"] == ident.owner_type and s["owner_id"] == ident.owner_id)
+    if not out["is_owner"]:
+        out = redact_for_recipient(out)
     return out
 
 
@@ -562,8 +654,20 @@ async def shared_spark(spark_id: str):
     s = await db.sparks.find_one({"id": spark_id}, NO_ID)
     if not s:
         raise HTTPException(404, "Spark not found")
-    keys = ("id", "title", "emoji", "tagline", "description", "primary_vibe", "vibe_tags", "estimated_cost", "estimated_duration", "activities", "location_label", "date_label", "time_label", "lat", "lng", "needs_verification")
-    return {k: s.get(k) for k in keys}
+    keys = ("id", "title", "emoji", "tagline", "description", "primary_vibe", "vibe_tags", "estimated_cost", "estimated_duration", "activities", "location_label", "date_label", "time_label", "scheduled_at", "lat", "lng", "needs_verification", "surprise", "dress_code", "revealed_steps", "completed_at", "occasion")
+    return redact_for_recipient({k: s.get(k) for k in keys})
+
+
+@api.put("/sparks/{spark_id}/reveal")
+async def reveal_step(spark_id: str, ident: Annotated[Identity, Depends(identity)]):
+    s = await db.sparks.find_one({"id": spark_id, "owner_type": ident.owner_type, "owner_id": ident.owner_id}, NO_ID)
+    if not s:
+        raise HTTPException(404, "Spark not found")
+    total = len(s.get("activities", []))
+    revealed = min(s.get("revealed_steps", 1) + 1, total)
+    await db.sparks.update_one({"id": spark_id}, {"$set": {"revealed_steps": revealed}})
+    await track("surprise_step_revealed", ident, {"spark_id": spark_id, "step": revealed})
+    return {"revealed_steps": revealed, "total": total}
 
 
 @api.post("/sparks/{spark_id}/save")
@@ -592,7 +696,7 @@ async def unsave_spark(spark_id: str, ident: Annotated[Identity, Depends(identit
 async def schedule_spark(spark_id: str, data: ScheduleIn, ident: Annotated[Identity, Depends(identity)]):
     res = await db.sparks.update_one(
         {"id": spark_id, "owner_type": ident.owner_type, "owner_id": ident.owner_id},
-        {"$set": {"date_label": data.date_label, "time_label": data.time_label, "status": "scheduled"}},
+        {"$set": {"date_label": data.date_label, "time_label": data.time_label, "scheduled_at": data.scheduled_at, "status": "scheduled"}},
     )
     if res.matched_count == 0:
         raise HTTPException(404, "Spark not found")
@@ -609,15 +713,30 @@ async def share_spark(spark_id: str, data: ScheduleIn, ident: Annotated[Identity
         updates["date_label"] = data.date_label
     if data.time_label is not None:
         updates["time_label"] = data.time_label
+    if data.scheduled_at is not None:
+        updates["scheduled_at"] = data.scheduled_at
     if s["owner_type"] == ident.owner_type and s["owner_id"] == ident.owner_id:
         await db.sparks.update_one({"id": spark_id}, {"$set": updates, "$inc": {"share_count": 1}})
-    await track("spark_shared", ident, {"spark_id": spark_id, "title": s["title"]})
+    await track("spark_shared", ident, {"spark_id": spark_id, "title": s["title"], "surprise": bool(s.get("surprise"))})
     when = " · ".join(x for x in [data.date_label or s.get("date_label"), data.time_label or s.get("time_label")] if x)
-    lines = ["I found something for us. ✨", "", f"{s['emoji']} {s['title']}", s.get("tagline", "")]
-    if when:
-        lines.append(when)
-    lines += [s.get("location_label", ""), "", '"I found something I think we\'d enjoy. Want to come with me?"', "", f"Sent with Date Spark ✨ · datespark://spark/{spark_id}"]
-    return {"invitation": "\n".join(l for l in lines if l is not None), "share_url": f"datespark://spark/{spark_id}", "when": when}
+    share_url = data.share_url or f"datespark://spark/{spark_id}"
+    if s.get("surprise"):
+        first = (s.get("activities") or [{}])[0]
+        meet = first.get("address") or s.get("location_label", "")
+        lines = ["I’m planning a surprise for us. ✨", "", f"🎁 {s['title']}", f"Meet me: {meet}"]
+        if when:
+            lines.append(f"When: {when}")
+        if s.get("dress_code"):
+            lines.append(f"Dress code: {s['dress_code']}")
+        lines += ["", "\"Trust me on this one. Want to come with me?\"", "", f"Open your invitation: {share_url}"]
+    else:
+        lines = ["I found something for us. ✨", "", f"{s['emoji']} {s['title']}", s.get("tagline", "")]
+        if s.get("occasion"):
+            lines.append(f"For: {s['occasion']}")
+        if when:
+            lines.append(when)
+        lines += [s.get("location_label", ""), "", '"I found something I think we\'d enjoy. Want to come with me?"', "", f"See the plan: {share_url}"]
+    return {"invitation": "\n".join(l for l in lines if l is not None), "share_url": share_url, "when": when}
 
 
 @api.post("/sparks/{spark_id}/complete")
