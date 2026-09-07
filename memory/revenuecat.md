@@ -4,7 +4,7 @@ This file is supposed to serve as a memory to you if you have to interact with u
 ## Identifiers (from /setup response — copy verbatim)
 - rc_project_id: proj3b7b691f
 - apple_app_id: app0e83d1764d
-- play_app_id: appb1f71feaf0
+- play_app_id: appb1f71feaf0 (package_name updated to com.date_spark.myapp on 2026-06 via idempotent /setup)
 - entitlement_lookup_key: pro
 - offering_lookup_key: default
 - Packages (package -> product_id, current price):

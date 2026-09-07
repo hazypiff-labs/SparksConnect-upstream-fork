@@ -36,3 +36,6 @@ Build "Date Spark", a connection-and-experience planning mobile app (NOT a datin
 - P1: Google/Apple sign-in; deep-link handling for datespark://spark/{id} recipient view; Completed flow prompt after date passes
 - P1: Premium features: surprise Spark mode, special-occasion planning, advanced budget/distance controls
 - P2: subscription_cancelled event via RevenueCat webhook; dark theme values; experience imagery per vibe
+
+## Android package renamed (2026-06)
+- app.json android.package = com.date_spark.myapp (was com.emergent.vibefinder.rvztki). iOS bundleIdentifier unchanged. RevenueCat Play app re-synced.

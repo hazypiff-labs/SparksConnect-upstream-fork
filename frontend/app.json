@@ -23,7 +23,7 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#FFF9F5"
       },
-      "package": "com.emergent.vibefinder.rvztki",
+      "package": "com.date_spark.myapp",
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
