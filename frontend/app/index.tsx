@@ -5,10 +5,12 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import Animated, { FadeInDown, FadeInUp } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Ionicons from "@react-native-vector-icons/ionicons";
 
 import { track } from "@/src/api";
 import { Button, SparkGlyph } from "@/src/components/ui";
 import { IMAGES } from "@/src/constants";
+import { useSession } from "@/src/session";
 import { fonts, makeStyles, spacing, useTheme } from "@/src/theme";
 
 const useStyles = makeStyles((c) => ({
@@ -29,6 +31,7 @@ export default function Welcome() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { googleLogin, googleBusy } = useSession();
   return (
     <View style={s.root} testID="welcome-screen">
       <Image source={{ uri: IMAGES.welcome }} style={s.image} contentFit="cover" transition={500} />
@@ -52,7 +55,15 @@ export default function Welcome() {
                 router.replace("/(tabs)/create");
               }}
             />
-            <Button title="Log In" variant="glass" testID="welcome-login-button" onPress={() => router.push({ pathname: "/auth", params: { mode: "login" } })} />
+            <Button
+              title="Continue with Google"
+              variant="glass"
+              testID="welcome-google-button"
+              loading={googleBusy}
+              onPress={() => googleLogin().catch(() => {})}
+              icon={<Ionicons name="logo-google" size={18} color={colors.onSurfaceInverse} />}
+            />
+            <Button title="Log In" variant="ghost" testID="welcome-login-button" onPress={() => router.push({ pathname: "/auth", params: { mode: "login" } })} style={{ opacity: 0.95 }} />
             <Button title="Explore first" variant="ghost" testID="welcome-explore-button" onPress={() => router.replace("/(tabs)/home")} style={{ opacity: 0.9 }} />
           </Animated.View>
         </View>
