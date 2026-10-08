@@ -7,6 +7,38 @@ export const RELATIONSHIPS = [
   { key: "special", label: "Someone Special", emoji: "✨" },
 ];
 
+/** Experience Profiles (Increment 2). "couple" is the original Date Spark flow, untouched. */
+export type ExperienceProfile = {
+  key: string;
+  label: string;
+  emoji: string;
+  headline: string;
+  subtitle: string;
+  /** which existing "who" cards to show; null = no cards (relationship is fixed) */
+  relationships: string[] | null;
+  defaultRelationship: string | null;
+  locationTitle: string;
+};
+
+export const EXPERIENCE_PROFILES: ExperienceProfile[] = [
+  { key: "couple", label: "Couple", emoji: "❤️", headline: "Who are you spending time with?", subtitle: "Pick one. We'll tailor every Spark to this connection.", relationships: RELATIONSHIPS.map((r) => r.key), defaultRelationship: null, locationTitle: "Starting from" },
+  { key: "friends", label: "Friends", emoji: "👫", headline: "Who's coming along?", subtitle: "Outings built for conversation, laughs and shared moments.", relationships: ["friends", "group"], defaultRelationship: "friends", locationTitle: "Starting from" },
+  { key: "family", label: "Family", emoji: "👨‍👩‍👧", headline: "Who's in the family plan?", subtitle: "Inclusive, all-ages experiences everyone can enjoy.", relationships: ["family", "group"], defaultRelationship: "family", locationTitle: "Starting from" },
+  { key: "celebration", label: "Celebration", emoji: "🥂", headline: "Who are you celebrating with?", subtitle: "Pick the people, then choose the occasion below.", relationships: RELATIONSHIPS.map((r) => r.key), defaultRelationship: null, locationTitle: "Starting from" },
+  { key: "travel", label: "Travel", emoji: "🧳", headline: "Who's traveling with you?", subtitle: "Local gems and easy logistics for a place you're visiting.", relationships: ["solo", "partner", "friends", "family", "group"], defaultRelationship: null, locationTitle: "Where are you visiting?" },
+  { key: "solo", label: "Solo", emoji: "🧘", headline: "A moment just for you", subtitle: "Experiences that feel great to do on your own.", relationships: null, defaultRelationship: "solo", locationTitle: "Starting from" },
+];
+
+export const SOLO_RELATIONSHIP = { key: "solo", label: "Just me", emoji: "🧘" };
+
+export function relationshipOption(key: string) {
+  return key === SOLO_RELATIONSHIP.key ? SOLO_RELATIONSHIP : RELATIONSHIPS.find((r) => r.key === key);
+}
+
+export function profileFor(key: string | null | undefined): ExperienceProfile {
+  return EXPERIENCE_PROFILES.find((p) => p.key === key) ?? EXPERIENCE_PROFILES[0];
+}
+
 export const VIBES = [
   { key: "romantic", label: "Romantic", emoji: "❤️" },
   { key: "fun", label: "Fun & Playful", emoji: "😂" },

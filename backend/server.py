@@ -43,6 +43,8 @@ DEFAULT_CONFIG = {
         {"title": "Game Night Out", "tagline": "Arcade → Tacos → Late-night dessert", "vibe": "Fun & Playful"},
     ],
     "ai_settings": {"model": "claude-sonnet-4-6", "guidance": "Prioritize conversation-friendly, memorable moments."},
+    # Feature flags — toggled from the admin dashboard, no redeploy needed
+    "features": {"experience_profiles": True},
 }
 
 app = FastAPI(title="Date Spark API")
@@ -129,7 +131,7 @@ class GenerateIn(BaseModel):
         if self.occasion:
             return "celebration"
         rel = self.relationship_type.lower()
-        return {"friends": "friends", "group": "friends", "family": "family"}.get(rel, "couple")
+        return {"friends": "friends", "group": "friends", "family": "family", "solo": "solo"}.get(rel, "couple")
 
     def experience_context(self) -> dict[str, Any]:
         """Only the fields the caller actually supplied, so the legacy prompt is unchanged when nothing new is sent."""
@@ -176,6 +178,7 @@ class ConfigUpdate(BaseModel):
     promo_message: Optional[str] = None
     featured_experiences: Optional[list[dict[str, Any]]] = None
     ai_settings: Optional[dict[str, Any]] = None
+    features: Optional[dict[str, bool]] = None
 
 
 # ---------------------------------------------------------------- identity
@@ -250,6 +253,7 @@ async def identity(
 async def get_config() -> dict:
     cfg = await db.app_config.find_one({"key": "main"}, NO_ID)
     merged = {**DEFAULT_CONFIG, **(cfg or {})}
+    merged["features"] = {**DEFAULT_CONFIG["features"], **((cfg or {}).get("features") or {})}
     merged.pop("key", None)
     return merged
 
@@ -307,7 +311,7 @@ async def shutdown():
 @api.get("/config/public")
 async def public_config():
     cfg = await get_config()
-    return {k: cfg[k] for k in ("free_spark_limit", "premium_price", "trial_days", "promo_message", "featured_experiences")}
+    return {k: cfg[k] for k in ("free_spark_limit", "premium_price", "trial_days", "promo_message", "featured_experiences", "features")}
 
 
 @api.get("/places/geocode")

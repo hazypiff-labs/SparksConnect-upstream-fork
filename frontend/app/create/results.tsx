@@ -56,6 +56,8 @@ export default function Results() {
           exclude_titles: draft.seenTitles,
           occasion: draft.occasion,
           surprise: draft.surprise,
+          // Experience Profiles: only sent for non-Couple profiles so the original dating request is byte-for-byte unchanged
+          ...(draft.experienceType && draft.experienceType !== "couple" ? { experience_type: draft.experienceType } : {}),
         },
       }),
     onSuccess: (data) => {

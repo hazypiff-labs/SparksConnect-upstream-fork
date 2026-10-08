@@ -6,6 +6,8 @@ export type Location = { label: string; lat?: number; lng?: number } | null;
 
 export type Draft = {
   relationship: string | null;
+  /** Experience Profile (Increment 2). null/"couple" = original Date Spark flow. */
+  experienceType: string | null;
   vibes: string[];
   budget: string | null;
   distance: string | null;
@@ -17,7 +19,7 @@ export type Draft = {
   usage: { used: number; limit: number } | null;
 };
 
-const initial: Draft = { relationship: null, vibes: [], budget: null, distance: null, location: null, occasion: null, surprise: false, results: [], seenTitles: [], usage: null };
+const initial: Draft = { relationship: null, experienceType: null, vibes: [], budget: null, distance: null, location: null, occasion: null, surprise: false, results: [], seenTitles: [], usage: null };
 
 type WizardCtx = { draft: Draft; update: (patch: Partial<Draft>) => void; reset: () => void };
 const Ctx = createContext<WizardCtx | null>(null);

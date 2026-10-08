@@ -54,6 +54,7 @@ RELATIONSHIP_TEXT = {
     "family": "family (multi-generational, keep it inclusive)",
     "group": "a group of people",
     "special": "someone special to them",
+    "solo": "themselves — a solo outing (comfortable and rewarding to do alone)",
 }
 
 SYSTEM_PROMPT = """You are Date Spark's experience designer. Your mission: help people create moments that bring them closer together in the real world.

@@ -8,7 +8,7 @@ import { KeyboardAwareScrollView, KeyboardStickyView } from "react-native-keyboa
 
 import { api, track } from "@/src/api";
 import { Button, StepHeader, StickyFooter, useToast } from "@/src/components/ui";
-import { DISTANCES } from "@/src/constants";
+import { DISTANCES, profileFor } from "@/src/constants";
 import { useSession } from "@/src/session";
 import { fonts, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { useWizard } from "@/src/wizard";
@@ -130,7 +130,7 @@ export default function DistanceStep() {
           })}
         </View>
 
-        <Text style={s.sectionTitle}>Starting from</Text>
+        <Text style={s.sectionTitle}>{profileFor(draft.experienceType).locationTitle}</Text>
         <View style={s.locCard} testID="location-card">
           {draft.location ? (
             <View style={s.locRow}>

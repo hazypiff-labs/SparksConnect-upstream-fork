@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Pressable, Text, TextInput, View } from "react-native";
+import { Pressable, Switch, Text, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Ionicons from "@react-native-vector-icons/ionicons";
@@ -46,8 +46,10 @@ export default function Admin() {
   const config = useQuery({ queryKey: ["admin", "config"], queryFn: () => api<Stats>("/admin/config"), enabled: isAdmin });
 
   const [form, setForm] = useState({ free_spark_limit: "", premium_price: "", trial_days: "", promo_message: "", guidance: "", featured: "" });
+  const [features, setFeatures] = useState<Record<string, boolean>>({});
   useEffect(() => {
     if (config.data) {
+      setFeatures(config.data.features ?? {});
       setForm({
         free_spark_limit: String(config.data.free_spark_limit),
         premium_price: String(config.data.premium_price),
@@ -68,6 +70,7 @@ export default function Admin() {
           premium_price: parseFloat(form.premium_price),
           trial_days: parseInt(form.trial_days, 10),
           promo_message: form.promo_message,
+          features,
           ai_settings: { ...(config.data?.ai_settings ?? {}), guidance: form.guidance },
           featured_experiences: form.featured
             .split("\n")
@@ -162,6 +165,11 @@ export default function Admin() {
           <TextInput testID="admin-ai-input" style={s.input} multiline value={form.guidance} onChangeText={(v) => setForm({ ...form, guidance: v })} placeholder="e.g. Favor outdoor, low-cost, conversation-friendly plans" placeholderTextColor={colors.muted} />
           <Text style={s.label}>Featured experiences (one per line: Title | Tagline | Vibe)</Text>
           <TextInput testID="admin-featured-input" style={[s.input, { minHeight: 90 }]} multiline value={form.featured} onChangeText={(v) => setForm({ ...form, featured: v })} />
+          <Text style={s.label}>Feature flags</Text>
+          <View style={s.listRow} testID="admin-flag-experience-profiles-row">
+            <Text style={s.listLabel}>Experience Profiles (Couple · Friends · Family · Celebration · Travel · Solo)</Text>
+            <Switch testID="admin-flag-experience-profiles" value={features.experience_profiles !== false} onValueChange={(v) => setFeatures({ ...features, experience_profiles: v })} trackColor={{ true: colors.brandPrimary, false: colors.borderStrong }} thumbColor={colors.surfaceSecondary} />
+          </View>
           <Button title="Save settings" testID="admin-save-button" onPress={() => save.mutate()} loading={save.isPending} />
         </View>
       </KeyboardAwareScrollView>
