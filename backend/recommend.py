@@ -9,9 +9,23 @@ from typing import Any
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
-from places import search_venues
+from places import haversine_miles, search_venues
 
 logger = logging.getLogger("recommend")
+
+# Approximate door-to-door speeds (mph) used for travel-leg estimates between verified venues.
+TRANSPORT_SPEED_MPH = {"walk": 3.0, "transit": 10.0, "drive": 22.0}
+TRANSPORT_LABEL = {"walk": "Walk", "transit": "Transit", "drive": "Drive"}
+
+EXPERIENCE_TYPE_TEXT = {
+    "couple": "a couple (date / relationship experience)",
+    "friends": "a group of friends (shared outing)",
+    "family": "a family (inclusive, all ages welcome)",
+    "celebration": "a celebration (birthday, anniversary or special occasion)",
+    "travel": "a traveler exploring a new place (local gems, easy logistics)",
+    "solo": "one person treating themselves (solo-friendly, comfortable alone)",
+    "surprise_me": "someone who wants to be surprised",
+}
 
 # Vibe → venue search queries (real-world data pulled from the place provider)
 VIBE_QUERIES: dict[str, list[str]] = {
@@ -69,7 +83,66 @@ Return ONLY valid JSON (no markdown) with this exact shape:
     {"name":"Coffee","venue_id":"<id or null>","start_time":"6:00 PM","end_time":"7:00 PM","estimated_cost":"$12","note":"short tip"}
   ]
 }]}
-Produce exactly 3 sparks. Normal mode: 2-4 activities each. OCCASION mode: 3-5 activities with occasion-specific touches (a toast, a keepsake, a photo moment, a meaningful closing stop). SURPRISE mode: the first activity is the meeting point (clear time + place); the description must be a teaser that does not spoil later stops; include a dress_code. Activities always in chronological order."""
+Produce exactly 3 sparks. Normal mode: 2-4 activities each. OCCASION mode: 3-5 activities with occasion-specific touches (a toast, a keepsake, a photo moment, a meaningful closing stop). SURPRISE mode: the first activity is the meeting point (clear time + place); the description must be a teaser that does not spoil later stops; include a dress_code. SURPRISE_ME mode: the person gave only budget/time/company and wants you to choose the vibe — pick a bold, well-matched theme per spark and vary the three strongly. Activities always in chronological order.
+When EXPERIENCE DETAILS are provided: respect party_size (group-friendly venues, costs are totals for the whole party), fit the whole plan inside duration_hours, keep the total within budget_amount when given, weave in the listed interests, and space stops for the transport mode (walking plans stay within ~1 mile between stops)."""
+
+
+def parse_cost(text: str | None) -> float | None:
+    """Best-effort USD parse of model/venue cost strings like "$35", "$25–$50" (midpoint), "Free". None if unknown."""
+    if text is None:
+        return None
+    t = str(text).strip().lower()
+    if not t:
+        return None
+    if "free" in t or t in ("$0", "0"):
+        return 0.0
+    nums = [float(n.replace(",", "")) for n in re.findall(r"\d[\d,]*(?:\.\d+)?", t)]
+    if not nums:
+        return None
+    if len(nums) >= 2:
+        return round((nums[0] + nums[1]) / 2, 2)
+    return nums[0]
+
+
+def compute_travel_legs(activities: list[dict], transport: str | None) -> list[dict]:
+    """Travel between consecutive stops that both have verified coordinates. Legs without coordinates are omitted."""
+    speed = TRANSPORT_SPEED_MPH.get((transport or "drive").lower(), TRANSPORT_SPEED_MPH["drive"])
+    mode = (transport or "drive").lower() if (transport or "drive").lower() in TRANSPORT_SPEED_MPH else "drive"
+    legs: list[dict] = []
+    for i in range(len(activities) - 1):
+        a, b = activities[i], activities[i + 1]
+        if None in (a.get("lat"), a.get("lng"), b.get("lat"), b.get("lng")):
+            continue
+        miles = round(haversine_miles(a["lat"], a["lng"], b["lat"], b["lng"]), 2)
+        minutes = max(1, int(round(miles / speed * 60))) if miles > 0 else 0
+        legs.append({"from_index": i, "to_index": i + 1, "miles": miles, "minutes": minutes, "mode": mode, "label": f"{TRANSPORT_LABEL[mode]} · {minutes} min · {miles} mi"})
+    return legs
+
+
+def cost_rollup(activities: list[dict], party_size: int | None) -> dict:
+    """Sum known per-activity costs. Never invents a number: unknown stops are counted and flagged."""
+    known: list[float] = []
+    unknown = 0
+    for a in activities:
+        v = parse_cost(a.get("estimated_cost"))
+        if v is None:
+            unknown += 1
+        else:
+            known.append(v)
+    total = round(sum(known), 2) if known else None
+    per_person = round(total / party_size, 2) if total is not None and party_size and party_size > 0 else None
+    return {"total_estimated_cost": total, "per_person_cost": per_person, "priced_stops": len(known), "unpriced_stops": unknown, "complete": unknown == 0 and bool(known)}
+
+
+def resolve_mode(surprise: bool, occasion: str | None, surprise_me: bool) -> str:
+    """Existing SURPRISE and OCCASION modes take precedence; SURPRISE_ME is purely additive."""
+    if surprise:
+        return "SURPRISE"
+    if occasion:
+        return "OCCASION"
+    if surprise_me:
+        return "SURPRISE_ME"
+    return "NORMAL"
 
 
 def _slug_query_list(vibes: list[str]) -> list[str]:
@@ -140,17 +213,22 @@ async def generate_sparks(
     ai_settings: dict[str, Any],
     occasion: str | None = None,
     surprise: bool = False,
+    experience: dict[str, Any] | None = None,
 ) -> list[dict]:
+    experience = experience or {}
+    surprise_me = bool(experience.get("surprise_me"))
     radius_miles = {"5": 5, "10": 10, "25": 25, "anywhere": 60}.get(str(distance), 10)
     lat, lng = location.get("lat"), location.get("lng")
     venues: list[dict] = []
+    # SURPRISE_ME with no vibes: cast a wide net so the model can pick the theme.
+    venue_vibes = vibes or (list(VIBE_QUERIES.keys()) if surprise_me else [])
     if lat is not None and lng is not None:
-        venues = await gather_venues(lat, lng, radius_miles, vibes)
+        venues = await gather_venues(lat, lng, radius_miles, venue_vibes)
     venue_map = {v["id"]: v for v in venues}
 
     context = {
         "spending_time_with": RELATIONSHIP_TEXT.get(relationship_type, relationship_type),
-        "desired_vibes": vibes,
+        "desired_vibes": vibes if vibes else "you choose (SURPRISE_ME)",
         "budget": BUDGET_TEXT.get(budget, budget),
         "max_travel_miles": radius_miles,
         "location_label": location.get("label") or "their area",
@@ -162,8 +240,14 @@ async def generate_sparks(
         "admin_guidance": ai_settings.get("guidance", ""),
         "venues_available": bool(venues),
         "occasion": occasion or None,
-        "mode": "SURPRISE" if surprise else ("OCCASION" if occasion else "NORMAL"),
+        "mode": resolve_mode(surprise, occasion, surprise_me),
     }
+    if experience:
+        details = {k: v for k, v in experience.items() if k != "surprise_me"}
+        if "experience_type" in details:
+            details["experience_type"] = EXPERIENCE_TYPE_TEXT.get(details["experience_type"], details["experience_type"])
+        if details:
+            context["experience_details"] = details
     prompt = (
         "CONTEXT:\n" + json.dumps(context, ensure_ascii=False)
         + "\n\nVENUES (real data, reference by venue_id only):\n"
@@ -209,6 +293,8 @@ async def generate_sparks(
                 }
             )
         distance_miles = first_venue.get("distance_miles") if first_venue else None
+        travel_legs = compute_travel_legs(activities, experience.get("transport"))
+        costs = cost_rollup(activities, experience.get("party_size"))
         sparks.append(
             {
                 "title": s.get("title") or "A Spark",
@@ -227,6 +313,11 @@ async def generate_sparks(
                 "lat": first_venue.get("lat") if first_venue else lat,
                 "lng": first_venue.get("lng") if first_venue else lng,
                 "needs_verification": needs_verification,
+                # Experience Engine foundation (additive)
+                "travel_legs": travel_legs,
+                "total_travel_minutes": sum(l["minutes"] for l in travel_legs) if travel_legs else None,
+                "total_travel_miles": round(sum(l["miles"] for l in travel_legs), 2) if travel_legs else None,
+                **costs,
             }
         )
     return sparks

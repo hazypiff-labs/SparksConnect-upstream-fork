@@ -40,4 +40,9 @@ Build "Date Spark", a connection-and-experience planning mobile app (NOT a datin
 ## Android package renamed (2026-06)
 - app.json android.package = com.date_spark.myapp (was com.emergent.vibefinder.rvztki). iOS bundleIdentifier unchanged. RevenueCat Play app re-synced.
 
+## Date Spark 2.0 — Increment 1: Engine Foundation (2026‑06) ✅
+- Backend only, zero UI change. `GenerateIn` gained optional `experience_type, party_size, budget_amount, duration_hours, interests[], transport, scheduled_at, surprise_me` (vibes required unless surprise_me). Engine: `resolve_mode()` (SURPRISE > OCCASION > SURPRISE_ME > NORMAL), `compute_travel_legs()` (haversine, walk/transit/drive speeds), `cost_rollup()` (never invents prices), `parse_cost()`. Sparks store the new fields + `travel_legs`, `total_travel_minutes/miles`, `total_estimated_cost`, `per_person_cost`, `priced/unpriced_stops`, `complete`. `server.py` not split (not needed).
+- Tests: `backend/tests/test_engine_foundation.py` (21) + existing 22 → 43/43 pass.
+- Next: Increment 2 (Experience Profiles UI) after user review.
+
 ## Android versionCode set to 104 (2026-06) — package com.date_spark.myapp unchanged.

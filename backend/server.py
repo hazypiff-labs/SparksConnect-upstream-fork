@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pwdlib import PasswordHash
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -95,7 +95,7 @@ class SubscriptionSync(BaseModel):
 
 class GenerateIn(BaseModel):
     relationship_type: str
-    vibes: list[str] = Field(min_length=1)
+    vibes: list[str] = []  # required unless surprise_me (validated below) — legacy requests behave exactly as before
     budget: str
     distance: str
     location: dict[str, Any] = {}
@@ -104,6 +104,53 @@ class GenerateIn(BaseModel):
     time_label: Optional[str] = None
     occasion: Optional[str] = None
     surprise: bool = False
+    # --- Experience Engine foundation (all optional; defaults reproduce the original behaviour) ---
+    experience_type: Optional[str] = Field(default=None, max_length=32)  # couple | friends | family | celebration | travel | solo | surprise_me
+    party_size: Optional[int] = Field(default=None, ge=1, le=50)
+    budget_amount: Optional[float] = Field(default=None, ge=0, le=100000)  # free-form total budget in USD
+    duration_hours: Optional[float] = Field(default=None, gt=0, le=24)
+    interests: list[str] = Field(default_factory=list, max_length=20)
+    transport: Optional[str] = Field(default=None, max_length=16)  # walk | transit | drive
+    scheduled_at: Optional[str] = None  # ISO datetime when the experience should start
+    surprise_me: bool = False  # engine picks the vibes itself (additive, distinct from `surprise`)
+
+    @model_validator(mode="after")
+    def _vibes_required_unless_surprise_me(self):
+        if not self.vibes and not self.surprise_me:
+            raise ValueError("vibes: at least one vibe is required")
+        return self
+
+    def resolved_experience_type(self) -> str:
+        """Derive the experience profile. Legacy requests (no experience_type) map onto the original dating semantics."""
+        if self.experience_type:
+            return self.experience_type.lower()
+        if self.surprise_me:
+            return "surprise_me"
+        if self.occasion:
+            return "celebration"
+        rel = self.relationship_type.lower()
+        return {"friends": "friends", "group": "friends", "family": "family"}.get(rel, "couple")
+
+    def experience_context(self) -> dict[str, Any]:
+        """Only the fields the caller actually supplied, so the legacy prompt is unchanged when nothing new is sent."""
+        ctx: dict[str, Any] = {}
+        if self.experience_type:
+            ctx["experience_type"] = self.experience_type.lower()
+        if self.party_size is not None:
+            ctx["party_size"] = self.party_size
+        if self.budget_amount is not None:
+            ctx["budget_amount"] = self.budget_amount
+        if self.duration_hours is not None:
+            ctx["duration_hours"] = self.duration_hours
+        if self.interests:
+            ctx["interests"] = self.interests
+        if self.transport:
+            ctx["transport"] = self.transport.lower()
+        if self.scheduled_at:
+            ctx["scheduled_at"] = self.scheduled_at
+        if self.surprise_me:
+            ctx["surprise_me"] = True
+        return ctx
 
 
 class ScheduleIn(BaseModel):
@@ -534,6 +581,7 @@ async def generate(
             occasion=data.occasion,
             surprise=data.surprise,
             ai_settings=cfg.get("ai_settings", {}),
+            experience=data.experience_context(),
         )
     except Exception as exc:
         logger.exception("Spark generation failed")
@@ -556,10 +604,18 @@ async def generate(
                 "location": data.location,
                 "date_label": data.date_label,
                 "time_label": data.time_label,
-                "scheduled_at": None,
+                "scheduled_at": data.scheduled_at,
                 "occasion": data.occasion,
                 "surprise": data.surprise,
                 "revealed_steps": 1 if data.surprise else len(s.get("activities", [])),
+                # Experience Engine foundation fields (additive)
+                "experience_type": data.resolved_experience_type(),
+                "party_size": data.party_size,
+                "budget_amount": data.budget_amount,
+                "duration_hours": data.duration_hours,
+                "interests": data.interests,
+                "transport": data.transport,
+                "surprise_me": data.surprise_me,
                 "status": "generated",
                 "share_count": 0,
                 "created_at": now(),
@@ -571,7 +627,7 @@ async def generate(
     await track(
         "sparks_generated",
         ident,
-        {"relationship_type": data.relationship_type.lower(), "vibes": data.vibes, "budget": data.budget, "distance": data.distance, "location": data.location.get("label"), "occasion": data.occasion, "surprise": data.surprise, "titles": [d["title"] for d in docs]},
+        {"relationship_type": data.relationship_type.lower(), "vibes": data.vibes, "budget": data.budget, "distance": data.distance, "location": data.location.get("label"), "occasion": data.occasion, "surprise": data.surprise, "experience_type": data.resolved_experience_type(), "surprise_me": data.surprise_me, "titles": [d["title"] for d in docs]},
     )
     usage["used"] += 1
     return {"sparks": [serialize_spark(d, set()) for d in docs], "usage": usage}
