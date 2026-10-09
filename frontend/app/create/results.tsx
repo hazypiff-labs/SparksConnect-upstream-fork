@@ -11,6 +11,7 @@ import { api, ApiError, type Spark } from "@/src/api";
 import { SparkCard } from "@/src/components/SparkCard";
 import { Button, SparkGlyph, StickyFooter } from "@/src/components/ui";
 import { BUDGETS, DISTANCES, labelFor } from "@/src/constants";
+import { computeScheduledAt } from "@/src/schedule";
 import { useSession } from "@/src/session";
 import { fonts, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { useWizard } from "@/src/wizard";
@@ -42,6 +43,8 @@ export default function Results() {
   const { draft, update } = useWizard();
   const { isPremium } = useSession();
   const started = useRef(false);
+  const scheduled = computeScheduledAt(draft.dateLabel, draft.timeLabel, draft.customDate);
+  const scheduledIso = scheduled ? scheduled.toISOString() : null;
 
   const generate = useMutation({
     mutationFn: () =>
@@ -58,6 +61,16 @@ export default function Results() {
           surprise: draft.surprise,
           // Experience Profiles: only sent for non-Couple profiles so the original dating request is byte-for-byte unchanged
           ...(draft.experienceType && draft.experienceType !== "couple" ? { experience_type: draft.experienceType } : {}),
+          // Experience Builder: only the inputs the user actually supplied
+          ...(draft.surpriseMe ? { surprise_me: true } : {}),
+          ...(draft.partySize != null ? { party_size: draft.partySize } : {}),
+          ...(draft.budgetAmount != null ? { budget_amount: draft.budgetAmount } : {}),
+          ...(draft.durationHours != null ? { duration_hours: draft.durationHours } : {}),
+          ...(draft.interests.length ? { interests: draft.interests } : {}),
+          ...(draft.transport ? { transport: draft.transport } : {}),
+          ...(draft.dateLabel ? { date_label: draft.dateLabel === "Choose a Date" ? draft.customDate || null : draft.dateLabel } : {}),
+          ...(draft.timeLabel ? { time_label: draft.timeLabel } : {}),
+          ...(scheduledIso ? { scheduled_at: scheduledIso } : {}),
         },
       }),
     onSuccess: (data) => {
@@ -83,7 +96,7 @@ export default function Results() {
   }
 
   const err = generate.error as ApiError | null;
-  const summary = `${labelFor(BUDGETS, draft.budget)} • ${labelFor(DISTANCES, draft.distance)} • ${draft.location?.label ?? ""}`;
+  const summary = `${draft.budgetAmount != null ? `$${draft.budgetAmount}` : labelFor(BUDGETS, draft.budget)} • ${labelFor(DISTANCES, draft.distance)} • ${draft.location?.label ?? ""}`;
 
   const fix = (patch: Partial<typeof draft>) => {
     update({ ...patch, results: [] });
@@ -97,7 +110,7 @@ export default function Results() {
           <Ionicons name="chevron-back" size={22} color={colors.onSurface} />
         </Pressable>
         <View style={{ flex: 1 }}>
-          <Text style={s.title}>{draft.surprise ? "Your Surprise Sparks 🎁" : "Your Sparks ✨"}</Text>
+          <Text style={s.title}>{draft.surprise ? "Your Surprise Sparks 🎁" : draft.surpriseMe ? "Surprise! Your Sparks 🎲" : "Your Sparks ✨"}</Text>
           <Text style={s.sub} numberOfLines={1}>{summary}</Text>
         </View>
       </View>

@@ -170,6 +170,10 @@ export default function Admin() {
             <Text style={s.listLabel}>Experience Profiles (Couple · Friends · Family · Celebration · Travel · Solo)</Text>
             <Switch testID="admin-flag-experience-profiles" value={features.experience_profiles !== false} onValueChange={(v) => setFeatures({ ...features, experience_profiles: v })} trackColor={{ true: colors.brandPrimary, false: colors.borderStrong }} thumbColor={colors.surfaceSecondary} />
           </View>
+          <View style={s.listRow} testID="admin-flag-experience-builder-row">
+            <Text style={s.listLabel}>Experience Builder (party size · exact budget · interests · when · duration · transport · Surprise me)</Text>
+            <Switch testID="admin-flag-experience-builder" value={features.experience_builder !== false} onValueChange={(v) => setFeatures({ ...features, experience_builder: v })} trackColor={{ true: colors.brandPrimary, false: colors.borderStrong }} thumbColor={colors.surfaceSecondary} />
+          </View>
           <Button title="Save settings" testID="admin-save-button" onPress={() => save.mutate()} loading={save.isPending} />
         </View>
       </KeyboardAwareScrollView>

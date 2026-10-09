@@ -1,13 +1,15 @@
 import React from "react";
-import { ScrollView, Text, View } from "react-native";
+import { Pressable, ScrollView, Text, View } from "react-native";
 import { useRouter } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
+import { LinearGradient } from "expo-linear-gradient";
+import Ionicons from "@react-native-vector-icons/ionicons";
 
-import { api, track } from "@/src/api";
+import { track } from "@/src/api";
 import { Button, Chip, OptionCard, StepHeader, StickyFooter, useToast } from "@/src/components/ui";
-import { EXPERIENCE_PROFILES, OCCASIONS, profileFor, relationshipOption } from "@/src/constants";
+import { EXPERIENCE_PROFILES, OCCASIONS, PARTY_DEFAULTS, profileFor, relationshipOption } from "@/src/constants";
+import { useFeatures } from "@/src/features";
 import { useSession } from "@/src/session";
-import { fonts, makeStyles, spacing } from "@/src/theme";
+import { fonts, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { useWizard } from "@/src/wizard";
 
 const useStyles = makeStyles((c) => ({
@@ -21,6 +23,17 @@ const useStyles = makeStyles((c) => ({
   soloCard: { marginHorizontal: spacing.lg, marginTop: spacing.sm, backgroundColor: c.brandTertiary, borderRadius: 20, padding: spacing.lg, gap: 4 },
   soloTitle: { fontFamily: fonts.display, fontSize: 18, fontWeight: "700", color: c.onBrandTertiary },
   soloSub: { fontFamily: fonts.text, fontSize: 14, color: c.onBrandTertiary, lineHeight: 20 },
+  fade: { position: "absolute", right: 0, top: 0, bottom: 0, width: 48 },
+  builderRow: { marginHorizontal: spacing.lg, marginTop: spacing.lg, flexDirection: "row", gap: spacing.md },
+  compact: { flex: 1, backgroundColor: c.surfaceSecondary, borderRadius: radius.lg, borderWidth: 1, borderColor: c.border, padding: spacing.md, gap: spacing.sm },
+  compactLabel: { fontFamily: fonts.text, fontSize: 12, fontWeight: "700", color: c.muted, letterSpacing: 0.6 },
+  stepper: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  stepBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: c.brandTertiary, alignItems: "center", justifyContent: "center" },
+  stepVal: { fontFamily: fonts.display, fontSize: 22, fontWeight: "700", color: c.onSurface },
+  surpriseMe: { flex: 1, borderRadius: radius.lg, borderWidth: 2, borderColor: c.border, backgroundColor: c.surfaceSecondary, padding: spacing.md, justifyContent: "space-between" },
+  surpriseMeOn: { borderColor: c.brandPrimary, backgroundColor: c.brandTertiary },
+  surpriseMeTitle: { fontFamily: fonts.display, fontSize: 15, fontWeight: "700", color: c.onSurface },
+  surpriseMeSub: { fontFamily: fonts.text, fontSize: 12, color: c.muted, lineHeight: 16 },
 }));
 
 export default function WhoStep() {
@@ -29,19 +42,24 @@ export default function WhoStep() {
   const toast = useToast();
   const { draft, update } = useWizard();
   const { isPremium } = useSession();
-  const config = useQuery({ queryKey: ["config"], queryFn: () => api("/config/public") });
+  const { colors } = useTheme();
+  const features = useFeatures();
   // Feature flag: when off, this screen renders exactly the original Date Spark Step 1.
-  const profilesEnabled = config.data?.features?.experience_profiles !== false;
+  const profilesEnabled = features.profiles;
+  const builderEnabled = features.builder;
   const profile = profilesEnabled ? profileFor(draft.experienceType) : profileFor("couple");
   const isCouple = profile.key === "couple";
+  const partySize = draft.partySize ?? PARTY_DEFAULTS[profile.key] ?? 2;
 
   const pickProfile = (key: string) => {
     if (key === draft.experienceType || (key === "couple" && !draft.experienceType)) return;
     const next = profileFor(key);
     const keepRelationship = draft.relationship && next.relationships?.includes(draft.relationship) ? draft.relationship : next.defaultRelationship;
-    update({ experienceType: key === "couple" ? null : key, relationship: keepRelationship });
+    update({ experienceType: key === "couple" ? null : key, relationship: keepRelationship, partySize: null, interests: [] });
     track("experience_type_selected", { experience_type: key });
   };
+
+  const setParty = (n: number) => update({ partySize: Math.min(50, Math.max(profile.key === "solo" ? 1 : 1, n)) });
 
   const pickOccasion = (key: string) => {
     if (draft.occasion === key) return update({ occasion: null });
@@ -61,11 +79,47 @@ export default function WhoStep() {
         {profilesEnabled ? (
           <View style={{ marginBottom: spacing.md }} testID="experience-profile-section">
             <Text style={s.profileLabel}>WHAT KIND OF EXPERIENCE?</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.chipRow} style={{ height: 56 }} testID="experience-profile-row">
-              {EXPERIENCE_PROFILES.map((p) => (
-                <Chip key={p.key} label={`${p.emoji} ${p.label}`} selected={profile.key === p.key} onPress={() => pickProfile(p.key)} testID={`profile-${p.key}`} />
-              ))}
-            </ScrollView>
+            <View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[s.chipRow, { paddingRight: spacing.xxxl }]} style={{ height: 56 }} testID="experience-profile-row">
+                {EXPERIENCE_PROFILES.map((p) => (
+                  <Chip key={p.key} label={`${p.emoji} ${p.label}`} selected={profile.key === p.key} onPress={() => pickProfile(p.key)} testID={`profile-${p.key}`} />
+                ))}
+              </ScrollView>
+              <LinearGradient pointerEvents="none" colors={[`${colors.surface}00`, colors.surface]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.fade} testID="experience-profile-fade" />
+            </View>
+          </View>
+        ) : null}
+
+        {builderEnabled ? (
+          <View style={s.builderRow} testID="builder-quick-row">
+            {!isCouple ? (
+              <View style={s.compact} testID="party-size-card">
+                <Text style={s.compactLabel}>{profile.key === "solo" ? "PEOPLE" : "HOW MANY PEOPLE?"}</Text>
+                <View style={s.stepper}>
+                  <Pressable testID="party-size-minus" style={s.stepBtn} onPress={() => setParty(partySize - 1)} disabled={partySize <= 1}>
+                    <Ionicons name="remove" size={20} color={colors.onBrandTertiary} />
+                  </Pressable>
+                  <Text style={s.stepVal} testID="party-size-value">{partySize}</Text>
+                  <Pressable testID="party-size-plus" style={s.stepBtn} onPress={() => setParty(partySize + 1)}>
+                    <Ionicons name="add" size={20} color={colors.onBrandTertiary} />
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+            <Pressable
+              testID="surprise-me-toggle"
+              accessibilityRole="switch"
+              accessibilityState={{ checked: draft.surpriseMe }}
+              style={[s.surpriseMe, draft.surpriseMe && s.surpriseMeOn]}
+              onPress={() => {
+                const on = !draft.surpriseMe;
+                update({ surpriseMe: on, ...(on ? { vibes: [], interests: [] } : {}) });
+                track("surprise_me_toggled", { on });
+              }}
+            >
+              <Text style={s.surpriseMeTitle}>🎲 Surprise me {draft.surpriseMe ? "· on" : ""}</Text>
+              <Text style={s.surpriseMeSub}>{draft.surpriseMe ? "We’ll pick the vibe. Just set budget, where and when." : "Skip the vibe questions and let us choose."}</Text>
+            </Pressable>
           </View>
         ) : null}
 
@@ -99,8 +153,9 @@ export default function WhoStep() {
           disabled={!draft.relationship}
           onPress={() => {
             if (!draft.relationship) return toast.show(isCouple ? "Please select who you're with" : "Please pick who's coming", "error");
-            track("relationship_selected", { relationship_type: draft.relationship, occasion: draft.occasion, experience_type: profile.key });
-            router.push("/create/vibe");
+            track("relationship_selected", { relationship_type: draft.relationship, occasion: draft.occasion, experience_type: profile.key, party_size: isCouple ? undefined : partySize, surprise_me: draft.surpriseMe });
+            // Surprise me: skip the vibe questions entirely
+            router.push(builderEnabled && draft.surpriseMe ? "/create/budget" : "/create/vibe");
           }}
         />
       </StickyFooter>

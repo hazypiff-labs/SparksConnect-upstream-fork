@@ -9,6 +9,7 @@ import { KeyboardAwareScrollView, KeyboardStickyView } from "react-native-keyboa
 import { api, track } from "@/src/api";
 import { Button, StepHeader, StickyFooter, useToast } from "@/src/components/ui";
 import { DISTANCES, profileFor } from "@/src/constants";
+import { useFeatures } from "@/src/features";
 import { useSession } from "@/src/session";
 import { fonts, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { useWizard } from "@/src/wizard";
@@ -44,6 +45,7 @@ export default function DistanceStep() {
   const toast = useToast();
   const { draft, update } = useWizard();
   const { isPremium } = useSession();
+  const { builder } = useFeatures();
   const [manual, setManual] = useState("");
 
   const toggleSurprise = (on: boolean) => {
@@ -107,7 +109,7 @@ export default function DistanceStep() {
 
   return (
     <View style={s.root} testID="create-distance-screen">
-      <StepHeader step={4} total={4} title="How far are you willing to go?" subtitle="We only use your location to find nearby experiences." testID="distance-header" />
+      <StepHeader step={4} total={builder ? 5 : 4} title="How far are you willing to go?" subtitle="We only use your location to find nearby experiences." testID="distance-header" />
       <KeyboardAwareScrollView contentContainerStyle={s.body} bottomOffset={120}>
         <View style={s.grid}>
           {DISTANCES.map((d) => {
@@ -180,14 +182,14 @@ export default function DistanceStep() {
       <KeyboardStickyView>
         <StickyFooter>
           <Button
-            title="Find My Sparks ✨"
+            title={builder ? "Continue" : "Find My Sparks ✨"}
             testID="find-sparks-button"
             disabled={!canContinue}
             onPress={() => {
               if (!draft.distance) return toast.show("Choose a distance", "error");
               if (!draft.location) return toast.show("Set a starting location first", "error");
               update({ results: [], seenTitles: [] });
-              router.push("/create/results");
+              router.push(builder ? "/create/when" : "/create/results");
             }}
           />
         </StickyFooter>

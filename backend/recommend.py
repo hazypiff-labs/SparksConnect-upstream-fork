@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import uuid
+from datetime import datetime
 from typing import Any
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
@@ -135,6 +136,17 @@ def cost_rollup(activities: list[dict], party_size: int | None) -> dict:
     return {"total_estimated_cost": total, "per_person_cost": per_person, "priced_stops": len(known), "unpriced_stops": unknown, "complete": unknown == 0 and bool(known)}
 
 
+def when_text(scheduled_at: str | None, date_label: str | None, time_label: str | None) -> str:
+    """Human-readable 'when' for the prompt. A concrete scheduled_at wins so the model can respect opening hours."""
+    if scheduled_at:
+        try:
+            dt = datetime.fromisoformat(str(scheduled_at).replace("Z", "+00:00"))
+            return dt.strftime("%A %B %-d, %-I:%M %p") + " (plan stops so venues are open at these times)"
+        except ValueError:
+            pass
+    return " ".join(x for x in [date_label, time_label] if x) or "not chosen yet"
+
+
 def resolve_mode(surprise: bool, occasion: str | None, surprise_me: bool) -> str:
     """Existing SURPRISE and OCCASION modes take precedence; SURPRISE_ME is purely additive."""
     if surprise:
@@ -233,7 +245,7 @@ async def generate_sparks(
         "budget": BUDGET_TEXT.get(budget, budget),
         "max_travel_miles": radius_miles,
         "location_label": location.get("label") or "their area",
-        "when": " ".join(x for x in [date_label, time_label] if x) or "not chosen yet",
+        "when": when_text(experience.get("scheduled_at"), date_label, time_label),
         "user_favorite_vibes": history.get("favorite_vibes", []),
         "recently_saved_titles": history.get("saved_titles", [])[:5],
         "avoid_titles": exclude_titles[:12],

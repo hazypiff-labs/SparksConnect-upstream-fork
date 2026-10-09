@@ -40,6 +40,11 @@ Build "Date Spark", a connection-and-experience planning mobile app (NOT a datin
 ## Android package renamed (2026-06)
 - app.json android.package = com.date_spark.myapp (was com.emergent.vibefinder.rvztki). iOS bundleIdentifier unchanged. RevenueCat Play app re-synced.
 
+## Date Spark 2.0 — Increment 3: Experience Builder (2026‑06) ✅
+- Flag `features.experience_builder` (default on, admin switch, independent of profiles). Step 1: party‑size stepper (non‑Couple; defaults couple 2/friends 4/family 4/celebration 6/travel 2/solo 1), "🎲 Surprise me" preference card (skips Vibe step, no transport), profile‑row edge fade. Vibe: collapsible profile‑aware interests chips. Budget: exact amount + $50/100/150/250 quick chips (tier kept in sync via `tierForAmount`). Distance CTA → Continue. New Step 5 `create/when.tsx`: date/time chips (→ `scheduled_at`), duration chips, transport chips. `results.tsx` sends only supplied fields. Engine: `when_text()` formats scheduled_at (weekday/time) for hours‑aware planning. `surprise_me` no longer derives a profile (profile from company/occasion).
+- Tests: backend 86/86 (`test_experience_builder.py` new), frontend iteration 4 9/9 + manual flag‑off verification.
+- Next: Increment 4 (engine output upgrade: travel legs, cost summary, Adjust sheet) after user review.
+
 ## Date Spark 2.0 — Increment 2: Experience Profiles (2026‑06) ✅
 - Profiles: Couple (original flow, untouched) · Friends · Family · Celebration · Travel · Solo as a chip row on Step 1 (`(tabs)/create.tsx`), gated by `app_config.features.experience_profiles` (default on, admin switch). Profiles narrow/pre‑fill the existing "who" cards; `solo` relationship added; Travel relabels the location title. `experience_type` sent only for non‑Couple profiles. "Surprise me" remains a planning mode, not a profile.
 - Tests: backend 62/62 (new `test_experience_profiles.py`), frontend iteration 3 all pass.

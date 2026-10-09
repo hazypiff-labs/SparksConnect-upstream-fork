@@ -44,7 +44,7 @@ def test_existing_surprise_mode_untouched_by_profiles():
     assert g.resolved_experience_type() == "friends"
     # surprise_me stays an independent planning preference, not a profile
     g2 = GenerateIn(**{**BASE, "vibes": [], "surprise_me": True})
-    assert g2.resolved_experience_type() == "surprise_me" and g2.surprise is False
+    assert g2.resolved_experience_type() == "couple" and g2.surprise is False  # derived from company, not from the preference
 
 
 def test_occasion_without_profile_derives_celebration():

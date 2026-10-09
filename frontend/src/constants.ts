@@ -39,6 +39,43 @@ export function profileFor(key: string | null | undefined): ExperienceProfile {
   return EXPERIENCE_PROFILES.find((p) => p.key === key) ?? EXPERIENCE_PROFILES[0];
 }
 
+/** Experience Builder (Increment 3) */
+export const PARTY_DEFAULTS: Record<string, number> = { couple: 2, friends: 4, family: 4, celebration: 6, travel: 2, solo: 1 };
+export const QUICK_AMOUNTS = [50, 100, 150, 250];
+export const DURATIONS = [
+  { key: 1, label: "1 hour" },
+  { key: 2, label: "2 hours" },
+  { key: 3, label: "3 hours" },
+  { key: 4, label: "Evening" },
+  { key: 5, label: "Half day" },
+  { key: 8, label: "Full day" },
+];
+export const TRANSPORTS = [
+  { key: "drive", label: "Drive", emoji: "🚗" },
+  { key: "walk", label: "Walk", emoji: "🚶" },
+  { key: "transit", label: "Transit", emoji: "🚇" },
+];
+const BASE_INTERESTS = ["Live music", "Coffee", "Cocktails", "Outdoors", "Art", "Games", "Sports", "Food trucks", "Wine", "Dancing", "Markets", "Bookstores"];
+const PROFILE_INTERESTS: Record<string, string[]> = {
+  couple: ["Sunset spots", "Dessert"],
+  friends: ["Trivia", "Karaoke"],
+  family: ["Kid-friendly", "Playgrounds", "Animals"],
+  celebration: ["Private rooms", "Cake"],
+  travel: ["Landmarks", "Local eats", "Views"],
+  solo: ["Classes", "Quiet cafés", "Journaling"],
+};
+export function interestsFor(profile: string) {
+  return [...(PROFILE_INTERESTS[profile] ?? []), ...BASE_INTERESTS];
+}
+/** Map a free-form amount onto the existing budget tier so the legacy `budget` field is always valid. */
+export function tierForAmount(amount: number): string {
+  if (amount <= 0) return "free";
+  if (amount <= 25) return "under25";
+  if (amount <= 50) return "25-50";
+  if (amount <= 100) return "50-100";
+  return "100plus";
+}
+
 export const VIBES = [
   { key: "romantic", label: "Romantic", emoji: "❤️" },
   { key: "fun", label: "Fun & Playful", emoji: "😂" },

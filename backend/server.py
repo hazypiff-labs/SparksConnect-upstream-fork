@@ -44,7 +44,7 @@ DEFAULT_CONFIG = {
     ],
     "ai_settings": {"model": "claude-sonnet-4-6", "guidance": "Prioritize conversation-friendly, memorable moments."},
     # Feature flags — toggled from the admin dashboard, no redeploy needed
-    "features": {"experience_profiles": True},
+    "features": {"experience_profiles": True, "experience_builder": True},
 }
 
 app = FastAPI(title="Date Spark API")
@@ -126,8 +126,7 @@ class GenerateIn(BaseModel):
         """Derive the experience profile. Legacy requests (no experience_type) map onto the original dating semantics."""
         if self.experience_type:
             return self.experience_type.lower()
-        if self.surprise_me:
-            return "surprise_me"
+        # "Surprise me" is a planning preference, not a profile — the profile still comes from the company/occasion.
         if self.occasion:
             return "celebration"
         rel = self.relationship_type.lower()
