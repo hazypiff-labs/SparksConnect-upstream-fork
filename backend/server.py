@@ -44,7 +44,7 @@ DEFAULT_CONFIG = {
     ],
     "ai_settings": {"model": "claude-sonnet-4-6", "guidance": "Prioritize conversation-friendly, memorable moments."},
     # Feature flags — toggled from the admin dashboard, no redeploy needed
-    "features": {"experience_profiles": True, "experience_builder": True},
+    "features": {"experience_profiles": True, "experience_builder": True, "experience_output": True},
 }
 
 app = FastAPI(title="Date Spark API")
@@ -657,6 +657,11 @@ async def my_sparks(ident: Annotated[Identity, Depends(identity)]):
     }
 
 
+# Engine output fields (Increment 1 data, Increment 4 UI) — additive; older sparks simply lack them.
+OUTPUT_FIELDS = ("travel_legs", "total_travel_minutes", "total_travel_miles", "total_estimated_cost", "per_person_cost", "priced_stops", "unpriced_stops", "complete")
+PLAN_INPUT_FIELDS = ("experience_type", "party_size", "budget_amount", "duration_hours", "transport")
+
+
 def surprise_unlocked(s: dict) -> bool:
     """A surprise plan is visible to the recipient once its scheduled time has passed, it's fully revealed, or completed."""
     if not s.get("surprise"):
@@ -688,6 +693,10 @@ def redact_for_recipient(out: dict) -> dict:
     out["meet_time"] = first.get("start_time")
     out["meet_place"] = first.get("address") or out.get("location_label")
     out["locked_for_recipient"] = True
+    # Experience Output (Increment 4): travel legs / costs would hint at the hidden stops — strip them for locked recipients.
+    for k in OUTPUT_FIELDS:
+        if k in out:
+            out[k] = [] if k == "travel_legs" else None
     return out
 
 
@@ -713,7 +722,7 @@ async def shared_spark(spark_id: str):
     s = await db.sparks.find_one({"id": spark_id}, NO_ID)
     if not s:
         raise HTTPException(404, "Spark not found")
-    keys = ("id", "title", "emoji", "tagline", "description", "primary_vibe", "vibe_tags", "estimated_cost", "estimated_duration", "activities", "location_label", "date_label", "time_label", "scheduled_at", "lat", "lng", "needs_verification", "surprise", "dress_code", "revealed_steps", "completed_at", "occasion")
+    keys = ("id", "title", "emoji", "tagline", "description", "primary_vibe", "vibe_tags", "estimated_cost", "estimated_duration", "activities", "location_label", "date_label", "time_label", "scheduled_at", "lat", "lng", "needs_verification", "surprise", "dress_code", "revealed_steps", "completed_at", "occasion", *OUTPUT_FIELDS, *PLAN_INPUT_FIELDS)
     return redact_for_recipient({k: s.get(k) for k in keys})
 
 
@@ -868,6 +877,9 @@ async def admin_config(_: Annotated[dict, Depends(require_admin)]):
 @api.put("/admin/config")
 async def update_config(data: ConfigUpdate, _: Annotated[dict, Depends(require_admin)]):
     updates = {k: v for k, v in data.model_dump().items() if v is not None}
+    # Feature flags merge key-by-key so toggling one flag never resets the others.
+    features = updates.pop("features", None) or {}
+    updates.update({f"features.{k}": v for k, v in features.items()})
     if updates:
         await db.app_config.update_one({"key": "main"}, {"$set": updates}, upsert=True)
     return await get_config()

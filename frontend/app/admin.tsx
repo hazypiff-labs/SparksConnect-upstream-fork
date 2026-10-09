@@ -13,6 +13,13 @@ import { fonts, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
 type Stats = Record<string, any>;
 
+/** Admin-editable feature flags (app_config.features). `id` is used in testIDs: admin-flag-<id>[-row]. */
+const FLAGS = [
+  { key: "experience_profiles", id: "experience-profiles", label: "Experience Profiles (Couple · Friends · Family · Celebration · Travel · Solo)" },
+  { key: "experience_builder", id: "experience-builder", label: "Experience Builder (party size · exact budget · interests · when · duration · transport · Surprise me)" },
+  { key: "experience_output", id: "experience-output", label: "Experience Output (itinerary travel legs · cost summary · results summary chips)" },
+];
+
 const useStyles = makeStyles((c) => ({
   root: { flex: 1, backgroundColor: c.surface },
   header: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md, flexDirection: "row", alignItems: "center", gap: spacing.md },
@@ -166,14 +173,23 @@ export default function Admin() {
           <Text style={s.label}>Featured experiences (one per line: Title | Tagline | Vibe)</Text>
           <TextInput testID="admin-featured-input" style={[s.input, { minHeight: 90 }]} multiline value={form.featured} onChangeText={(v) => setForm({ ...form, featured: v })} />
           <Text style={s.label}>Feature flags</Text>
-          <View style={s.listRow} testID="admin-flag-experience-profiles-row">
-            <Text style={s.listLabel}>Experience Profiles (Couple · Friends · Family · Celebration · Travel · Solo)</Text>
-            <Switch testID="admin-flag-experience-profiles" value={features.experience_profiles !== false} onValueChange={(v) => setFeatures({ ...features, experience_profiles: v })} trackColor={{ true: colors.brandPrimary, false: colors.borderStrong }} thumbColor={colors.surfaceSecondary} />
-          </View>
-          <View style={s.listRow} testID="admin-flag-experience-builder-row">
-            <Text style={s.listLabel}>Experience Builder (party size · exact budget · interests · when · duration · transport · Surprise me)</Text>
-            <Switch testID="admin-flag-experience-builder" value={features.experience_builder !== false} onValueChange={(v) => setFeatures({ ...features, experience_builder: v })} trackColor={{ true: colors.brandPrimary, false: colors.borderStrong }} thumbColor={colors.surfaceSecondary} />
-          </View>
+          {FLAGS.map((f) => {
+            const on = features[f.key] !== false;
+            return (
+              <View key={f.key} style={s.listRow}>
+                <Pressable
+                  style={{ flex: 1, minHeight: 44, justifyContent: "center" }}
+                  testID={`admin-flag-${f.id}-row`}
+                  accessibilityRole="switch"
+                  accessibilityState={{ checked: on }}
+                  onPress={() => setFeatures({ ...features, [f.key]: !on })}
+                >
+                  <Text style={s.listLabel}>{f.label}</Text>
+                </Pressable>
+                <Switch testID={`admin-flag-${f.id}`} value={on} onValueChange={(v) => setFeatures({ ...features, [f.key]: v })} trackColor={{ true: colors.brandPrimary, false: colors.borderStrong }} thumbColor={colors.surfaceSecondary} />
+              </View>
+            );
+          })}
           <Button title="Save settings" testID="admin-save-button" onPress={() => save.mutate()} loading={save.isPending} />
         </View>
       </KeyboardAwareScrollView>

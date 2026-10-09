@@ -78,6 +78,15 @@ export type Activity = {
   locked?: boolean;
 };
 
+export type TravelLeg = {
+  from_index: number;
+  to_index: number;
+  miles: number;
+  minutes: number;
+  mode: string;
+  label: string;
+};
+
 export type Spark = {
   id: string;
   title: string;
@@ -114,6 +123,19 @@ export type Spark = {
   is_owner?: boolean;
   created_at: string | null;
   completed_at: string | null;
+  /** Experience Engine output (Increment 1 data, Increment 4 UI). All optional — older sparks lack them. */
+  travel_legs?: TravelLeg[] | null;
+  total_travel_minutes?: number | null;
+  total_travel_miles?: number | null;
+  total_estimated_cost?: number | null;
+  per_person_cost?: number | null;
+  priced_stops?: number | null;
+  unpriced_stops?: number | null;
+  experience_type?: string | null;
+  party_size?: number | null;
+  budget_amount?: number | null;
+  duration_hours?: number | null;
+  transport?: string | null;
 };
 
 export type User = {

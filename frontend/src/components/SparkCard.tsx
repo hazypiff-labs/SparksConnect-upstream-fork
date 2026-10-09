@@ -7,6 +7,7 @@ import Animated, { FadeInUp } from "react-native-reanimated";
 
 import type { Spark } from "@/src/api";
 import { cardImage } from "@/src/constants";
+import { glanceLine } from "@/src/plan";
 import { fonts, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { Button } from "@/src/components/ui";
 
@@ -27,10 +28,11 @@ const useStyles = makeStyles((c) => ({
   verifyText: { fontFamily: fonts.text, fontSize: 12, color: c.warning, fontWeight: "600" },
 }));
 
-export function SparkCard({ spark, index, onView }: { spark: Spark; index: number; onView: () => void }) {
+export function SparkCard({ spark, index, onView, glance = false }: { spark: Spark; index: number; onView: () => void; glance?: boolean }) {
   const s = useStyles();
   const { colors } = useTheme();
   const meta = [spark.vibe_tags?.slice(0, 2).join(" • ") || spark.primary_vibe, spark.estimated_cost, spark.estimated_duration].filter(Boolean).join(" • ");
+  const glanceText = glance ? glanceLine(spark) : null;
   return (
     <Animated.View entering={FadeInUp.delay(index * 120).duration(480)}>
       <Pressable testID={`spark-card-${index}`} onPress={onView} style={s.card}>
@@ -43,6 +45,7 @@ export function SparkCard({ spark, index, onView }: { spark: Spark; index: numbe
           <Text style={s.title} testID={`spark-card-${index}-title`}>{spark.title}</Text>
           {spark.tagline ? <Text style={s.tagline}>{spark.tagline}</Text> : null}
           <Text style={s.meta}>{meta}</Text>
+          {glanceText ? <Text style={s.meta} testID={`spark-card-${index}-glance`}>{glanceText}</Text> : null}
           <Text style={s.meta}>
             <Ionicons name="location" size={13} color={colors.onSurfaceInverse} /> {spark.distance_miles != null ? `${spark.distance_miles} miles away` : spark.location_label}
           </Text>

@@ -40,6 +40,13 @@ Build "Date Spark", a connection-and-experience planning mobile app (NOT a datin
 ## Android package renamed (2026-06)
 - app.json android.package = com.date_spark.myapp (was com.emergent.vibefinder.rvztki). iOS bundleIdentifier unchanged. RevenueCat Play app re-synced.
 
+## Date Spark 2.0 — Increment 4: Experience Output Upgrade (2026‑06) ✅
+- Flag `features.experience_output` (default on, admin switch + tappable label rows `admin-flag-<id>-row`; PUT /admin/config merges flags key‑by‑key). OFF = original Timeline/SparkCard/results header.
+- Spark detail: ordered itinerary with per‑stop duration (from start/end), travel connector between stops ("🚶 Walk ~2 min · 0.1 mi — Straight‑line estimate — not a road, walking or transit route"), "Price not listed" for unpriced stops, "At a glance" card (est. total, est. per person when party size known, "X of Y stops priced" warning, travel total, disclaimer), party‑size/transport chips. Surprise: owner sees legs only between revealed stops; locked recipient gets legs/costs stripped server‑side (`redact_for_recipient`), `/shared/{id}` exposes output + plan‑input fields.
+- Results: `results-summary-chips` (budget/amount, location·distance, when, party size, duration, transport) + SparkCard glance line "3 stops · ~5 min travel · $84 total ($14/person)".
+- New files: `frontend/src/plan.ts`, `frontend/src/components/CostSummary.tsx`, `backend/tests/test_experience_output.py`. Tests: backend 99/99, frontend iteration 6 8/8 (admin UI flag toggling, output ON/OFF, all‑flags‑OFF legacy Couple flow, surprise owner/recipient privacy).
+- Not included (by design): weather, events, routing APIs, reservations, payments, marketplace. Awaiting approval before Increment 5.
+
 ## Date Spark 2.0 — Increment 3 verification pass (2026‑06) ✅
 - Flag init fix: `useFeatures()` returns `ready`; Step 1–4 screens render `FeaturesLoading` until `/config/public` settles (no flash of Builder/Profiles UI when OFF). Who header shows 1/5 when builder ON.
 - Engine influence proven: `tests/test_builder_engine_influence.py` — LLM prompt captured (experience_details carries party_size/budget_amount/duration_hours/interests/transport/scheduled_at, `when` has weekday, SURPRISE_ME mode) + live generation (interest "Tacos" surfaces, walk legs, per‑person = total/party_size, duration ≤ window). Backend 91/91.

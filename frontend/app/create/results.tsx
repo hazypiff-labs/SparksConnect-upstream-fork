@@ -11,7 +11,9 @@ import { api, ApiError, type Spark } from "@/src/api";
 import { SparkCard } from "@/src/components/SparkCard";
 import { Button, SparkGlyph, StickyFooter } from "@/src/components/ui";
 import { BUDGETS, DISTANCES, labelFor } from "@/src/constants";
-import { computeScheduledAt } from "@/src/schedule";
+import { useFeatures } from "@/src/features";
+import { durationLabel, transportLabel } from "@/src/plan";
+import { computeScheduledAt, formatScheduled } from "@/src/schedule";
 import { useSession } from "@/src/session";
 import { fonts, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { useWizard } from "@/src/wizard";
@@ -32,6 +34,10 @@ const useStyles = makeStyles((c) => ({
   fixes: { width: "100%", gap: spacing.sm },
   fix: { minHeight: 56, borderRadius: radius.lg, backgroundColor: c.surfaceSecondary, borderWidth: 1, borderColor: c.border, paddingHorizontal: spacing.lg, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   fixText: { fontFamily: fonts.display, fontSize: 16, fontWeight: "700", color: c.onSurface },
+  chipScroller: { flexGrow: 0, backgroundColor: c.surface },
+  chipRow: { gap: spacing.sm, paddingHorizontal: spacing.lg, paddingBottom: spacing.md, alignItems: "center" },
+  chip: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: spacing.md, height: 32, borderRadius: radius.pill, backgroundColor: c.surfaceTertiary },
+  chipText: { fontFamily: fonts.text, fontSize: 13, fontWeight: "600", color: c.onSurfaceTertiary },
 }));
 
 export default function Results() {
@@ -42,6 +48,7 @@ export default function Results() {
   const queryClient = useQueryClient();
   const { draft, update } = useWizard();
   const { isPremium } = useSession();
+  const { output } = useFeatures();
   const started = useRef(false);
   const scheduled = computeScheduledAt(draft.dateLabel, draft.timeLabel, draft.customDate);
   const scheduledIso = scheduled ? scheduled.toISOString() : null;
@@ -97,6 +104,16 @@ export default function Results() {
 
   const err = generate.error as ApiError | null;
   const summary = `${draft.budgetAmount != null ? `$${draft.budgetAmount}` : labelFor(BUDGETS, draft.budget)} • ${labelFor(DISTANCES, draft.distance)} • ${draft.location?.label ?? ""}`;
+  // Experience Output: compact chips for every plan detail the user actually supplied.
+  const whenText = formatScheduled(scheduledIso) ?? [draft.dateLabel === "Choose a Date" ? draft.customDate : draft.dateLabel, draft.timeLabel].filter(Boolean).join(" · ");
+  const chips: { key: string; icon: React.ComponentProps<typeof Ionicons>["name"]; text: string }[] = [
+    { key: "budget", icon: "pricetag", text: draft.budgetAmount != null ? `$${draft.budgetAmount}` : labelFor(BUDGETS, draft.budget) },
+    { key: "location", icon: "location", text: [draft.location?.label, labelFor(DISTANCES, draft.distance)].filter(Boolean).join(" · ") },
+    ...(whenText ? [{ key: "when", icon: "calendar" as const, text: whenText }] : []),
+    ...(draft.partySize != null ? [{ key: "party", icon: "people" as const, text: `${draft.partySize} people` }] : []),
+    ...(durationLabel(draft.durationHours) ? [{ key: "duration", icon: "time" as const, text: durationLabel(draft.durationHours)! }] : []),
+    ...(draft.transport ? [{ key: "transport", icon: "navigate" as const, text: transportLabel(draft.transport) }] : []),
+  ];
 
   const fix = (patch: Partial<typeof draft>) => {
     update({ ...patch, results: [] });
@@ -111,9 +128,19 @@ export default function Results() {
         </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={s.title}>{draft.surprise ? "Your Surprise Sparks 🎁" : draft.surpriseMe ? "Surprise! Your Sparks 🎲" : "Your Sparks ✨"}</Text>
-          <Text style={s.sub} numberOfLines={1}>{summary}</Text>
+          {output ? null : <Text style={s.sub} numberOfLines={1}>{summary}</Text>}
         </View>
       </View>
+      {output ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.chipRow} style={s.chipScroller} testID="results-summary-chips">
+          {chips.map((c) => (
+            <View key={c.key} style={s.chip} testID={`results-chip-${c.key}`}>
+              <Ionicons name={c.icon} size={13} color={colors.onSurfaceTertiary} />
+              <Text style={s.chipText} numberOfLines={1}>{c.text}</Text>
+            </View>
+          ))}
+        </ScrollView>
+      ) : null}
 
       {generate.isPending ? (
         <View style={s.center} testID="results-loading">
@@ -153,7 +180,7 @@ export default function Results() {
         <>
           <ScrollView contentContainerStyle={s.list} showsVerticalScrollIndicator={false}>
             {draft.results.map((sp, i) => (
-              <SparkCard key={sp.id} spark={sp} index={i} onView={() => router.push(`/spark/${sp.id}`)} />
+              <SparkCard key={sp.id} spark={sp} index={i} glance={output} onView={() => router.push(`/spark/${sp.id}`)} />
             ))}
           </ScrollView>
           <StickyFooter>

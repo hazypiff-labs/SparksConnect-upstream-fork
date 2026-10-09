@@ -105,3 +105,9 @@
 - Fixed feature-flag initialization: `src/features.ts` now exposes `ready`; `(tabs)/create.tsx`, `create/vibe.tsx`, `create/budget.tsx`, `create/distance.tsx` render `FeaturesLoading` (testIDs `create-*-loading`) until `/api/config/public` settles, so Builder/Profiles UI can never flash when a flag is OFF. Who-step header now shows 1/5 when builder is ON.
 - New backend tests `tests/test_builder_engine_influence.py` (prompt capture with LLM mocked + live generation). Full suite 91/91.
 - Needs frontend E2E: builder flag OFF (via PUT /api/admin/config as admin) restores original 4-step flow; ON restores 5-step flow; no loading spinner stuck; legacy Couple flow intact. Flags must be left ON at the end.
+
+## Increment 4 — Experience Output Upgrade (2026-06, main agent)
+- New flag `features.experience_output` (default ON; admin switch `admin-flag-experience-output`; label-tap rows `admin-flag-<id>-row` toggle flags without the RN-web Switch). PUT /api/admin/config now merges feature flags key-by-key.
+- Spark detail (`app/spark/[id].tsx`): enriched Timeline (per-stop duration `itinerary-step-N-duration`, travel connector `itinerary-leg-N` labelled straight-line estimate, `itinerary-step-N-unpriced`), `cost-summary` card (`cost-total`, `cost-per-person`, `cost-unpriced`, `travel-total`, `estimate-disclaimer`), chips `chip-party-size`, `chip-transport`. Surprise owner: only legs between revealed stops; locked recipient: backend strips legs/costs.
+- Results (`app/create/results.tsx`): `results-summary-chips` with `results-chip-{budget,location,when,party,duration,transport}` replaces the plain summary line when flag ON; SparkCard `spark-card-N-glance` line.
+- Flag OFF → original Timeline/SparkCard/results header. Backend 99/99.

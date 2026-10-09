@@ -8,9 +8,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api, track, type Activity, type Spark } from "@/src/api";
 import { addSparkToCalendar } from "@/src/calendar";
 import { SparkMap } from "@/src/components/SparkMap";
+import { CostSummary } from "@/src/components/CostSummary";
 import { Timeline } from "@/src/components/Timeline";
 import { Button, StickyFooter, useToast } from "@/src/components/ui";
 import { OCCASIONS, labelFor } from "@/src/constants";
+import { useFeatures } from "@/src/features";
+import { transportEmoji, transportLabel, visibleLegs } from "@/src/plan";
 import { formatScheduled } from "@/src/schedule";
 import { useSession } from "@/src/session";
 import { fonts, makeStyles, radius, spacing, useTheme } from "@/src/theme";
@@ -58,6 +61,7 @@ export default function SparkDetail() {
   const toast = useToast();
   const queryClient = useQueryClient();
   const { user } = useSession();
+  const { output } = useFeatures();
 
   const spark = useQuery({ queryKey: ["sparks", id], queryFn: () => api<Spark>(`/sparks/${id}`), enabled: !!id });
 
@@ -154,6 +158,8 @@ export default function SparkDetail() {
     ...sp.activities.slice(revealed).map((_, i) => ({ activity_name: `Stop ${revealed + i + 1}`, venue: null, address: null, lat: null, lng: null, rating: null, hours: null, start_time: null, end_time: null, estimated_cost: null, external_url: null, note: null, verified: true, locked: true })),
   ];
   const mapActivities = sp.surprise && isOwner ? sp.activities.slice(0, revealed) : sp.activities;
+  // Experience Output: only legs between stops the viewer can already see (keeps surprise stops secret).
+  const legs = output ? visibleLegs(sp.travel_legs, revealed) : [];
 
   return (
     <View style={s.root} testID="spark-detail-screen">
@@ -223,6 +229,8 @@ export default function SparkDetail() {
             <View style={s.chip}><Ionicons name="time" size={13} color={colors.onSurfaceTertiary} /><Text style={s.chipText}>{sp.estimated_duration}</Text></View>
             {sp.distance_miles != null ? <View style={s.chip}><Ionicons name="navigate" size={13} color={colors.onSurfaceTertiary} /><Text style={s.chipText}>{sp.distance_miles} mi</Text></View> : null}
             <View style={s.chip}><Text style={s.chipText}>{sp.primary_vibe}</Text></View>
+            {output && sp.party_size ? <View style={s.chip} testID="chip-party-size"><Ionicons name="people" size={13} color={colors.onSurfaceTertiary} /><Text style={s.chipText}>{sp.party_size} people</Text></View> : null}
+            {output && sp.transport ? <View style={s.chip} testID="chip-transport"><Text style={s.chipText}>{transportEmoji(sp.transport)} {transportLabel(sp.transport)}</Text></View> : null}
           </View>
 
           {when ? (
@@ -253,7 +261,8 @@ export default function SparkDetail() {
           </View>
 
           <Text style={s.sectionTitle}>{sp.surprise && isOwner ? `Itinerary · ${revealed}/${total} revealed` : "Suggested itinerary"}</Text>
-          <Timeline activities={visibleActivities} />
+          <Timeline activities={visibleActivities} legs={legs} enriched={output} />
+          {output ? <CostSummary spark={sp} visibleStops={revealed} /> : null}
           </View>
           )}
 
