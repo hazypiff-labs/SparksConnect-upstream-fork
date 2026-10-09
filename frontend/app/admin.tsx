@@ -13,6 +13,15 @@ import { fonts, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
 type Stats = Record<string, any>;
 
+/** Server-enforced generation limits (app_config.limits). */
+const LIMIT_FIELDS = [
+  { key: "ip_hourly_cap", label: "Per network (IP) — Sparks per hour" },
+  { key: "ip_daily_cap", label: "Per network (IP) — Sparks per day" },
+  { key: "guest_ids_per_ip_daily", label: "New guest sessions per network per day" },
+  { key: "premium_daily_cap", label: "Premium ceiling — Sparks per day" },
+  { key: "premium_monthly_cap", label: "Premium ceiling — Sparks per month" },
+];
+
 /** Admin-editable feature flags (app_config.features). `id` is used in testIDs: admin-flag-<id>[-row]. */
 const FLAGS = [
   { key: "experience_profiles", id: "experience-profiles", label: "Experience Profiles (Couple · Friends · Family · Celebration · Travel · Solo)" },
@@ -56,9 +65,11 @@ export default function Admin() {
 
   const [form, setForm] = useState({ free_spark_limit: "", premium_price: "", trial_days: "", promo_message: "", guidance: "", featured: "" });
   const [features, setFeatures] = useState<Record<string, boolean>>({});
+  const [limits, setLimits] = useState<Record<string, string>>({});
   useEffect(() => {
     if (config.data) {
       setFeatures(config.data.features ?? {});
+      setLimits(Object.fromEntries(Object.entries(config.data.limits ?? {}).map(([k, v]) => [k, String(v)])));
       setForm({
         free_spark_limit: String(config.data.free_spark_limit),
         premium_price: String(config.data.premium_price),
@@ -80,6 +91,7 @@ export default function Admin() {
           trial_days: parseInt(form.trial_days, 10),
           promo_message: form.promo_message,
           features,
+          limits: Object.fromEntries(Object.entries(limits).map(([k, v]) => [k, parseInt(v, 10)]).filter(([, v]) => Number.isInteger(v) && (v as number) >= 0)),
           ai_settings: { ...(config.data?.ai_settings ?? {}), guidance: form.guidance },
           featured_experiences: form.featured
             .split("\n")
@@ -114,11 +126,12 @@ export default function Admin() {
         ["Sparks saved", d.sparks_saved],
         ["Sparks shared", d.sparks_shared],
         ["Sparks completed", d.sparks_completed],
-        ["Premium subscribers", d.premium_subscribers],
-        ["Trial users", d.trial_users],
-        ["MRR", `$${d.mrr}`],
-        ["Free → Premium", `${d.conversion_rate}%`],
+        ["Premium (self-reported)", d.premium_subscribers],
+        ["Trial (self-reported)", d.trial_users],
+        ["MRR (self-reported)", `$${d.mrr}`],
+        ["Free → Premium (self-reported)", `${d.conversion_rate}%`],
         ["Generate → Share", `${d.generate_to_share_rate}%`],
+        ["Rate-limited (30d)", d.rate_limited_requests ?? 0],
       ]
     : [];
 
@@ -164,6 +177,13 @@ export default function Admin() {
           <Text style={s.section}>Configuration</Text>
           <Text style={s.label}>Free Sparks per month</Text>
           <TextInput testID="admin-free-limit-input" style={s.input} keyboardType="number-pad" value={form.free_spark_limit} onChangeText={(v) => setForm({ ...form, free_spark_limit: v })} />
+          <Text style={s.label}>Generation limits (server-enforced; Premium claims are capped, never unlimited)</Text>
+          {LIMIT_FIELDS.map((f) => (
+            <View key={f.key} style={s.listRow}>
+              <Text style={s.listLabel}>{f.label}</Text>
+              <TextInput testID={`admin-limit-${f.key}`} style={[s.input, { width: 88, marginBottom: 0 }]} keyboardType="number-pad" value={limits[f.key] ?? ""} onChangeText={(v) => setLimits({ ...limits, [f.key]: v })} />
+            </View>
+          ))}
           <Text style={s.label}>Premium price (USD) — display only; store price is set in RevenueCat</Text>
           <TextInput testID="admin-price-input" style={s.input} keyboardType="decimal-pad" value={form.premium_price} onChangeText={(v) => setForm({ ...form, premium_price: v })} />
           <Text style={s.label}>Trial days</Text>

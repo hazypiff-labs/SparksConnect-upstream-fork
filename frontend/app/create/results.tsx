@@ -97,10 +97,12 @@ export default function Results() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!draft.relationship) {
-    router.replace("/(tabs)/create");
-    return null;
-  }
+  // Direct deep-link without a draft → back to the start (navigate from an effect, never during render).
+  const noDraft = !draft.relationship;
+  useEffect(() => {
+    if (noDraft) router.replace("/(tabs)/create");
+  }, [noDraft, router]);
+  if (noDraft) return null;
 
   const err = generate.error as ApiError | null;
   const summary = `${draft.budgetAmount != null ? `$${draft.budgetAmount}` : labelFor(BUDGETS, draft.budget)} • ${labelFor(DISTANCES, draft.distance)} • ${draft.location?.label ?? ""}`;
@@ -148,6 +150,14 @@ export default function Results() {
           <Text style={s.loadingTitle}>Designing your moment…</Text>
           <Text style={s.loadingSub}>Matching real places nearby with the vibe you’re after. This takes a few seconds.</Text>
           <Animated.View entering={FadeIn.delay(300)} style={s.skeleton} />
+        </View>
+      ) : err && err.status === 429 ? (
+        <View style={s.center} testID="results-rate-limited">
+          <Text style={{ fontSize: 52 }}>⏳</Text>
+          <Text style={s.emptyTitle}>Taking a short breather</Text>
+          <Text style={s.emptySub} testID="results-rate-limited-message">{err.message}</Text>
+          <Text style={s.emptySub}>{isPremium ? "This is a temporary usage limit, not a problem with your Premium plan — your access is unchanged." : "This is a temporary usage limit. Signing in keeps your Sparks and allowance with you across devices."}</Text>
+          <Button title="Back to Create" variant="secondary" testID="results-rate-limited-back" onPress={() => router.replace("/create")} style={{ alignSelf: "stretch" }} />
         </View>
       ) : err && err.status !== 402 ? (
         <ScrollView contentContainerStyle={s.center} testID="results-empty">

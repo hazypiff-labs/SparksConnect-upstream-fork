@@ -1,0 +1,56 @@
+{
+  "summary": "Phase A limits UX + admin: 4 of 5 scenarios PASS; 1 FAIL. (A) Admin UI: all 5 limit testIDs (admin-limit-ip_hourly_cap/ip_daily_cap/guest_ids_per_ip_daily/premium_daily_cap/premium_monthly_cap) render with defaults 20/80/20/15/60; all 'self-reported' tiles + 'Rate-limited (30d)' present (grew 23→27 during run); premium_daily_cap edit flow (15→14→15) saved via UI, toast 'Settings saved \u2728' visible, backend persisted (GET /api/admin/config confirms). (B) 429 pre-LLM UX: with guest_ids_per_ip_daily=0 and cleared localStorage, create flow surfaced results-rate-limited within ~1s showing 'Taking a short breather', 'Too many new guest sessions from your network today...', 'temporary usage limit' helper, and results-rate-limited-back navigates to /create. (C) 402 free-quota UX: PARTIAL \u2013 the 402 response triggers router.push('/premium') inside the onError callback in /app/frontend/app/create/results.tsx (lines 88-90) BEFORE the results-limit JSX branch is ever shown, so results-limit + results-premium-button are effectively unreachable; terminal state (user lands on /premium?reason=limit) is correct but the specified 'results-limit state visible, then tap button' UX does not occur. (D) Premium not blocked: BLOCKED by backend 500 \u2013 /api/sparks/generate raises NameError: name 'usage' is not defined (server.py line 658: `usage['used'] += 1` without ever assigning `usage = await usage_for(...)`); happens AFTER sparks are inserted into DB so stray sparks are written but client sees 500 and results-empty 'Request failed (500)' instead of cards. Reproduced for both admin (X-Premium=1) and guest premium claim. (E) Regression: /spark/b50acd38... (guest-hours-demo-02) renders itinerary legs, cost-summary, hours badges; /api/config/public flags unchanged; two surprise sparks via /api/shared/<id> return activities=[] when revealed=1 (recipient privacy intact). FINAL: GET /api/admin/config shows limits == defaults 20/80/20/15/60 and free_spark_limit == 3.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/sparks/generate",
+        "issue": "NameError: name 'usage' is not defined at /app/backend/server.py:658 (`usage['used'] += 1`). The function never assigns `usage`. This fires AFTER `await db.sparks.insert_many(docs)` (line 652) and AFTER `track('sparks_generated', ...)` (line 653-657) \u2013 so sparks get written to DB but the response is a 500, breaking BOTH free and premium happy paths. The pytest suite probably skipped the full happy path (Claude call) and missed this. Blocks Scenario D entirely.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "create/results.tsx (onError for 402)",
+        "issue": "results.tsx lines 88-90 call `router.push({ pathname: '/premium', params: { reason: 'limit' } })` directly in generate.onError when status===402 && !isPremium. This fires BEFORE the component can show the `results-limit` branch at line 180-186. Net effect: the 402 paywall screen inside /create/results is dead code for guests \u2013 users jump straight to /premium. The scenario C spec expects results-limit to be visible with a tappable `results-premium-button`. Either keep the auto-redirect and remove the branch (and update the spec) or remove the auto-redirect and let the user tap the CTA. Reference: /app/frontend/app/create/results.tsx:88-90, 180-186.",
+        "testID": "results-limit, results-premium-button",
+        "priority": "MEDIUM"
+      },
+      {
+        "component": "create/results.tsx (render-time redirect)",
+        "issue": "Line 100-102: `if (!draft.relationship) { router.replace('/(tabs)/create'); return null; }` triggers a navigation during render, producing the console warning 'Cannot update a component while rendering a different component'. Move the `router.replace` into a useEffect. Reference: /app/frontend/app/create/results.tsx:100-102.",
+        "testID": "results-screen",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Premium create flow",
+        "issue": "Blocked by the backend NameError above; UI shows 'We couldn't find the perfect Spark yet. Request failed (500)' instead of cards for both admin-logged-in (X-Premium=1) and premium-guest requests.",
+        "affected_testIDs": ["results-loading", "results-empty", "spark-card-0"]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "FIX CRITICAL backend: define `usage` inside POST /api/sparks/generate before incrementing. Likely `usage = await usage_for(ident, cfg)` right after reservation, or build it from `receipt`. File: /app/backend/server.py:658.",
+    "Decide /create/results 402 UX: either delete the results-limit JSX branch (and update the test spec) or remove the auto-router.push in generate.onError so users see the paywall summary + results-premium-button before navigating to /premium. File: /app/frontend/app/create/results.tsx:88-90.",
+    "Move the `if (!draft.relationship) router.replace(...)` to a useEffect to silence the setState-in-render warning. File: /app/frontend/app/create/results.tsx:100-102.",
+    "Add a happy-path pytest that actually asserts a 200 + usage field from POST /api/sparks/generate (mock generate_sparks only) so the NameError regression is caught by the backend suite."
+  ],
+  "critical_code_review_comments": [
+    "server.py: generation endpoint commits DB writes BEFORE computing the response payload, so a late failure (like the NameError) leaves orphan sparks in the DB (count = `sparks_generated` continues to climb even on 500). Consider assembling the response first, then insert_many + track in a `finally` safe sequence, or wrap in a transaction.",
+    "results.tsx: 202 lines is still manageable but the 402 path is split across two sites (onError redirect + err?.status===402 JSX branch) which is why the paywall branch became dead code \u2013 keep the paywall decision in one place."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (frontend-only scope, but 1 CRITICAL backend NameError surfaced)", "frontend": "4/5 scenarios (A, B, part of C, E) \u2013 Scenario D blocked by backend bug, Scenario C UX diverges from spec"},
+  "seed_data_creation": "None. All admin config mutations reverted via PUT /api/admin/config to defaults {20,80,20,15,60} + free_spark_limit:3 and re-verified via GET.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Admin config defaults restored at end of iteration_9 (verified via GET /api/admin/config). Browser localStorage was cleared twice during run so one or two fresh guest IDs were seeded on the test IP; `guest_ids_per_ip_daily` is 20 so this shouldn't block the next guest. Rate-limited (30d) counter is at 27 (grew from 23). Previous test IP has consumed ~5\u20136 slots against the 20/hour cap (one 429 rejection in B, one 402 in C, two 500s in D). The CRITICAL backend NameError in /api/sparks/generate must be fixed before any further premium-flow or free-flow UI tests \u2013 right now EVERY successful generation returns 500 (and still writes to DB).",
+  "rca_of_issue": "Root cause for Scenario D failure: /app/backend/server.py line 658 reads `usage['used'] += 1` but no `usage` variable has been assigned in the `generate` function body. Reproduction: with defaults restored, POST /api/sparks/generate with any valid payload (either X-Guest-ID + fresh guest OR Bearer admin token with X-Premium:1) \u2192 backend inserts the generated sparks into the `sparks` collection, then raises NameError, FastAPI returns 500. UI falls through the `err && err.status !== 402` branch and shows results-empty 'Request failed (500)'. Mitigation: add `usage = await usage_for(ident, cfg)` (or build an equivalent dict from `receipt`) just above line 658, OR move usage computation before the DB writes so it can also be included in the response under a stable shape. Verified in backend logs at /var/log/supervisor/backend.*.log (two consecutive 'NameError: name usage is not defined' tracebacks right after POST /api/sparks/generate 500)."
+}

@@ -1,0 +1,22 @@
+{
+  "summary": "Phase A RETEST — all requested scenarios PASS. (D) Premium create flow via UI (admin login → Couple → partner → romantic → $50-$100 → 10 miles / 'Austin, TX' → when-find-sparks-button): results-loading visible, then spark-card-0 rendered in ~20s with NO 'Request failed (500)'. No red screen. Direct API verification POST /api/sparks/generate with Authorization: Bearer <admin> + X-Premium:1 + X-Guest-ID returned HTTP 200 with keys sparks[] and usage{used:3,limit:3}. The server.py:658 NameError (iteration_9) is FIXED (`usage = await usage_for(ident, cfg)` now assigned before use). (C) 402 flow: with free_spark_limit=0 and a fresh guest (localStorage cleared), the create flow auto-navigated to /premium?reason=limit (Premium screen rendered: 'DATE SPARK PREMIUM', 'Take Your Spark Further', 'Start Premium — 14 days free'); browser back then landed on /create/results showing results-limit=TRUE and results-premium-button=TRUE — both the auto-nav branch and the 'back' results-limit branch work as intended. (F) Console: ZERO 'Cannot update a component while rendering a different component' warnings across all three browser sessions (confirms results.tsx router.replace moved into useEffect). Deep-link GET /create/results with no draft → redirected to /create (final URL /create, no /results). (SETUP note) Scenario C initially surfaced 429 ('Taking a short breather — Too many new guest sessions from your network today') because the shared egress IP's guest_ids_per_ip_daily (20) was exhausted by prior iterations — raised to 200 for the duration of Scenario C only, then restored. FINAL: GET /api/admin/config confirms limits == {ip_hourly_cap:20, ip_daily_cap:80, guest_ids_per_ip_daily:20, premium_daily_cap:15, premium_monthly_cap:60} and free_spark_limit == 3. Total LLM generations consumed this run: 2 (1 direct API + 1 UI).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/test_reports/iteration_10.json"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Scenario C needed a temp bump of guest_ids_per_ip_daily (20→200) because the shared egress IP had hit its daily guest-ID cap from prior iterations. Not a bug — just a shared-infra fact. Consider documenting that the test runner's IP is sticky across iterations so limit resets have to be mindful."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (frontend-only scope; /api/sparks/generate verified 200 via UI + direct API)", "frontend": "4/4 scenarios (D, C, F, FINAL) all PASS"},
+  "seed_data_creation": "None. All admin config mutations reverted via PUT /api/admin/config at end of run and verified via GET: limits defaults restored, free_spark_limit=3.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration_10 confirms iteration_9's two fixes shipped: (1) /api/sparks/generate NameError (server.py:658) is resolved — happy path returns 200 with usage{used,limit}; (2) /app/frontend/app/create/results.tsx no longer calls router.replace during render — the no-draft redirect is now inside a useEffect (lines 100-104). The 402 UX is intentional and verified: non-premium users hit a server 402 → onError auto-navigates to /premium?reason=limit, AND if they browser-back to /create/results, the dead-code warning from iteration_9 is actually alive — the results-limit JSX branch renders (results-premium-button visible). Shared egress IP state at end of run: ~3-4 extra sparks against ip_hourly_cap (20), ~2 against ip_daily_cap (80), and ~1-2 extra fresh guest IDs against guest_ids_per_ip_daily (20); still plenty of headroom. No red screens, no page errors across the run.",
+  "rca_of_issue": "N/A — iteration_9 bugs confirmed fixed. The server.py:658 fix (`usage = await usage_for(ident, cfg)` added right before the return) resolves the NameError. The results.tsx fix (moving `router.replace('/(tabs)/create')` into a useEffect gated on `noDraft`) resolves the setState-in-render warning. Both verified end-to-end."
+}

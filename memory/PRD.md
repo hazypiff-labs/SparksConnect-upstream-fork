@@ -40,6 +40,14 @@ Build "Date Spark", a connection-and-experience planning mobile app (NOT a datin
 ## Android package renamed (2026-06)
 - app.json android.package = com.date_spark.myapp (was com.emergent.vibefinder.rvztki). iOS bundleIdentifier unchanged. RevenueCat Play app re-synced.
 
+## Phase A — Subscription security & cost protection (2026‑06) ✅ (audit B‑1/B‑2/B‑3)
+- `backend/limits.py`: atomic Mongo limiter reserved before Claude/Places. Layers: per‑IP hourly/daily (20/80), new‑guest‑ids per IP per day (20), identity: free monthly (`free_spark_limit`, 402) or bounded premium ceilings when `X-Premium` is *claimed* (15/day, 60/month, 429). Fail‑closed. Receipts released on engine failure (identity units only). Admin‑tunable `app_config.limits` (not public). Client IP from X‑Forwarded‑For with `TRUSTED_PROXY_HOPS` (default 2 — verified on this platform via `GET /api/admin/ip-check`).
+- B‑3: `PUT /users/me/subscription` advisory (`subscription_source: self_reported`); admin stats labelled self‑reported + `rate_limited_requests`.
+- Frontend: `results-rate-limited` state distinguishes temporary limits from Premium; admin limit inputs; results deep‑link redirect moved to effect.
+- Tests: backend 160/160 (`test_phase_a_limits.py` 16 incl. concurrency, forged header, forged mirror, rotation, outage fail‑closed, expired→free, happy path with engine mocked); `tests/conftest.py` raises IP caps for the test runner's single IP during a session and restores. Frontend iterations 9–10 pass.
+- Separate plan for genuine server‑side RevenueCat verification: `/app/memory/revenuecat_server_verification_plan.md` (not implemented).
+- Rotate before production (values not recorded here): `JWT_SECRET`, `ADMIN_PASSWORD` (admin@datespark.app), test accounts `pa-*@example.com` created by tests.
+
 ## Date Spark 2.0 — Increment 5 · Phase 2: Real Travel Routing (2026‑06) ✅ built, flag OFF (not activated)
 - Verified pricing: Routes "Compute Routes Essentials" (SKU 9EFF‑679A‑9B16) 10k free/mo then $5/1k (→$4/$3/$1.50/$0.38). Requests avoid Pro triggers (no routingPreference/optimizeWaypointOrder/≤10 intermediates). Transit = 1 call per leg; drive/walk = 1 call per spark.
 - New `backend/routing.py`: provider abstraction, Mongo `route_cache` (7‑day TTL), `route_usage` daily cap (`ROUTES_DAILY_LIMIT`, default 300), per‑leg fallback. Legs carry `source`/`estimate`; spark `routing_source`. Flag `real_routing` default **False**; `GOOGLE_ROUTES_API_KEY` optional (falls back to Places key). No live calls made.

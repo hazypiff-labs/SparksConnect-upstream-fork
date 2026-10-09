@@ -8,7 +8,7 @@ from typing import Annotated, Any, Optional
 import httpx
 import jwt
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pwdlib import PasswordHash
@@ -18,6 +18,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 from places import geocode  # noqa: E402
+from limits import DEFAULT_LIMITS, LimitExceeded, Limiter, client_ip  # noqa: E402
 from recommend import generate_sparks  # noqa: E402
 from routing import RouteCache  # noqa: E402
 
@@ -27,6 +28,7 @@ logger = logging.getLogger("datespark")
 client = AsyncIOMotorClient(os.environ["MONGO_URL"])
 db = client[os.environ["DB_NAME"]]
 route_cache = RouteCache(db)
+limiter = Limiter(db)
 
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = "HS256"
@@ -48,6 +50,8 @@ DEFAULT_CONFIG = {
     # Feature flags — toggled from the admin dashboard, no redeploy needed
     # real_routing stays OFF until the Google Routes API is enabled on the project and activation is approved.
     "features": {"experience_profiles": True, "experience_builder": True, "experience_output": True, "venue_hours": True, "real_routing": False},
+    # Server-side generation limits (Launch audit B-1/B-2). X-Premium only selects the bounded premium ceiling.
+    "limits": dict(DEFAULT_LIMITS),
 }
 
 app = FastAPI(title="Date Spark API")
@@ -181,6 +185,7 @@ class ConfigUpdate(BaseModel):
     featured_experiences: Optional[list[dict[str, Any]]] = None
     ai_settings: Optional[dict[str, Any]] = None
     features: Optional[dict[str, bool]] = None
+    limits: Optional[dict[str, int]] = None
 
 
 # ---------------------------------------------------------------- identity
@@ -256,6 +261,7 @@ async def get_config() -> dict:
     cfg = await db.app_config.find_one({"key": "main"}, NO_ID)
     merged = {**DEFAULT_CONFIG, **(cfg or {})}
     merged["features"] = {**DEFAULT_CONFIG["features"], **((cfg or {}).get("features") or {})}
+    merged["limits"] = {**DEFAULT_CONFIG["limits"], **{k: v for k, v in ((cfg or {}).get("limits") or {}).items() if k in DEFAULT_LIMITS}}
     merged.pop("key", None)
     return merged
 
@@ -282,6 +288,7 @@ async def startup():
     await db.sparks.create_index([("owner_type", 1), ("owner_id", 1), ("created_at", -1)])
     await db.sparks.create_index("id", unique=True)
     await route_cache.ensure_indexes()
+    await limiter.ensure_indexes()
     await db.saved_sparks.create_index([("owner_type", 1), ("owner_id", 1), ("spark_id", 1)])
     await db.analytics_events.create_index([("event", 1), ("created_at", -1)])
     admin_email = os.environ.get("ADMIN_EMAIL", "").lower()
@@ -503,9 +510,10 @@ async def put_preferences(data: PreferencesIn, ident: Annotated[Identity, Depend
 
 @api.put("/users/me/subscription")
 async def sync_subscription(data: SubscriptionSync, user: Annotated[dict, Depends(require_user)]):
-    """Reporting mirror of the store subscription (RevenueCat entitlement is the source of truth on device)."""
+    """Advisory, SELF-REPORTED mirror of the on-device RevenueCat entitlement. It is never used for access
+    decisions or limits (see limits.py) and is labelled as self-reported wherever it is shown."""
     status = data.status if data.status in ("free", "trial", "premium") else "free"
-    updates: dict[str, Any] = {"subscription_status": status}
+    updates: dict[str, Any] = {"subscription_status": status, "subscription_source": "self_reported"}
     if status != "free" and not user.get("subscription_start"):
         updates["subscription_start"] = now()
     if status == "free":
@@ -518,6 +526,7 @@ async def sync_subscription(data: SubscriptionSync, user: Annotated[dict, Depend
                 "plan": "premium_monthly" if status != "free" else "free",
                 "status": status,
                 "provider": data.provider,
+                "source": "self_reported",
                 "renewal_date": data.renewal_date,
                 "updated_at": now(),
             },
@@ -538,7 +547,8 @@ async def usage_for(ident: Identity, cfg: dict) -> dict:
     used = await db.analytics_events.count_documents(
         {"event": "sparks_generated", "owner_type": ident.owner_type, "owner_id": ident.owner_id, "created_at": {"$gte": month_start()}}
     )
-    return {"used": used, "limit": cfg["free_spark_limit"]}
+    reserved = await limiter.free_used(ident.owner_type, ident.owner_id)
+    return {"used": max(used, reserved), "limit": cfg["free_spark_limit"]}
 
 
 def serialize_spark(s: dict, saved_ids: set[str] | None = None) -> dict:
@@ -557,14 +567,18 @@ async def spark_usage(ident: Annotated[Identity, Depends(identity)]):
 @api.post("/sparks/generate")
 async def generate(
     data: GenerateIn,
+    request: Request,
     ident: Annotated[Identity, Depends(identity)],
     x_premium: Annotated[str | None, Header()] = None,
 ):
     cfg = await get_config()
-    usage = await usage_for(ident, cfg)
-    is_premium = x_premium == "1"
-    if not is_premium and usage["used"] >= usage["limit"]:
-        raise HTTPException(402, "You've used this month's free Sparks. Upgrade to Premium for unlimited Sparks.")
+    # X-Premium is a client hint, never proof: it only selects a bounded ceiling (see limits.py). All limits are
+    # reserved atomically here, BEFORE any Claude / Google Places call.
+    try:
+        receipt = await limiter.reserve_generation(ip=client_ip(request), owner_type=ident.owner_type, owner_id=ident.owner_id, premium_claim=x_premium == "1", cfg=cfg)
+    except LimitExceeded as exc:
+        await track("generation_rate_limited", ident, {"scope": exc.scope, "premium_claim": x_premium == "1"})
+        raise HTTPException(exc.status, exc.message)
 
     prefs = await db.user_preferences.find_one({"owner_type": ident.owner_type, "owner_id": ident.owner_id}, NO_ID) or {}
     recent = await db.sparks.find({"owner_type": ident.owner_type, "owner_id": ident.owner_id}, NO_ID).sort("created_at", -1).limit(10).to_list(10)
@@ -595,8 +609,10 @@ async def generate(
         )
     except Exception as exc:
         logger.exception("Spark generation failed")
+        await limiter.release(receipt)
         raise HTTPException(502, f"Our Spark engine hit a snag: {str(exc)[:120]}")
     if not sparks:
+        await limiter.release(receipt)
         raise HTTPException(404, "We couldn't find the perfect Spark yet.")
 
     docs = []
@@ -639,7 +655,7 @@ async def generate(
         ident,
         {"relationship_type": data.relationship_type.lower(), "vibes": data.vibes, "budget": data.budget, "distance": data.distance, "location": data.location.get("label"), "occasion": data.occasion, "surprise": data.surprise, "experience_type": data.resolved_experience_type(), "surprise_me": data.surprise_me, "titles": [d["title"] for d in docs]},
     )
-    usage["used"] += 1
+    usage = await usage_for(ident, cfg)
     return {"sparks": [serialize_spark(d, set()) for d in docs], "usage": usage}
 
 
@@ -864,10 +880,13 @@ async def admin_stats(_: Annotated[dict, Depends(require_admin)]):
         "sparks_saved": saved,
         "sparks_shared": shared,
         "sparks_completed": completed,
+        # Self-reported by the client app (device-side RevenueCat entitlement); not authoritative billing data.
         "premium_subscribers": premium,
         "trial_users": trial,
         "mrr": round(premium * cfg["premium_price"], 2),
         "conversion_rate": round((premium / total_users) * 100, 1) if total_users else 0.0,
+        "subscription_metrics_source": "self_reported",
+        "rate_limited_requests": await db.analytics_events.count_documents({"event": "generation_rate_limited", "created_at": {"$gte": since}}),
         "generate_to_share_rate": round((sharers / generators) * 100, 1) if generators else 0.0,
         "popular_relationships": await top_values("relationship_type"),
         "popular_vibes": await top_values("vibes", unwind=True),
@@ -887,6 +906,8 @@ async def update_config(data: ConfigUpdate, _: Annotated[dict, Depends(require_a
     # Feature flags merge key-by-key so toggling one flag never resets the others.
     features = updates.pop("features", None) or {}
     updates.update({f"features.{k}": v for k, v in features.items()})
+    limits = updates.pop("limits", None) or {}
+    updates.update({f"limits.{k}": v for k, v in limits.items() if k in DEFAULT_LIMITS and isinstance(v, int) and v >= 0})
     if updates:
         await db.app_config.update_one({"key": "main"}, {"$set": updates}, upsert=True)
     return await get_config()
@@ -895,6 +916,13 @@ async def update_config(data: ConfigUpdate, _: Annotated[dict, Depends(require_a
 @api.get("/")
 async def root():
     return {"app": "Date Spark ✨", "tagline": "Create the moment."}
+
+
+@api.get("/admin/ip-check")
+async def admin_ip_check(request: Request, _: Annotated[dict, Depends(require_admin)]):
+    """Deployment check for the rate limiter: shows how the client address is resolved behind the proxy chain.
+    `resolved` must be the caller's public IP (not a load-balancer address) — otherwise set TRUSTED_PROXY_HOPS."""
+    return {"resolved": client_ip(request), "x_forwarded_for": request.headers.get("x-forwarded-for"), "cf_connecting_ip": request.headers.get("cf-connecting-ip"), "trusted_proxy_hops": os.environ.get("TRUSTED_PROXY_HOPS", "2")}
 
 
 app.include_router(api)
