@@ -19,6 +19,7 @@ const FLAGS = [
   { key: "experience_builder", id: "experience-builder", label: "Experience Builder (party size · exact budget · interests · when · duration · transport · Surprise me)" },
   { key: "experience_output", id: "experience-output", label: "Experience Output (itinerary travel legs · cost summary · results summary chips)" },
   { key: "venue_hours", id: "venue-hours", label: "Venue Hours (verify opening hours for the planned time · hide closed venues)" },
+  { key: "real_routing", id: "real-routing", label: "Real Routing (Google Routes API travel times · requires Routes API enabled on the project · billable beyond the free tier — keep OFF until approved)" },
 ];
 
 const useStyles = makeStyles((c) => ({

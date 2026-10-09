@@ -40,6 +40,13 @@ Build "Date Spark", a connection-and-experience planning mobile app (NOT a datin
 ## Android package renamed (2026-06)
 - app.json android.package = com.date_spark.myapp (was com.emergent.vibefinder.rvztki). iOS bundleIdentifier unchanged. RevenueCat Play app re-synced.
 
+## Date Spark 2.0 — Increment 5 · Phase 2: Real Travel Routing (2026‑06) ✅ built, flag OFF (not activated)
+- Verified pricing: Routes "Compute Routes Essentials" (SKU 9EFF‑679A‑9B16) 10k free/mo then $5/1k (→$4/$3/$1.50/$0.38). Requests avoid Pro triggers (no routingPreference/optimizeWaypointOrder/≤10 intermediates). Transit = 1 call per leg; drive/walk = 1 call per spark.
+- New `backend/routing.py`: provider abstraction, Mongo `route_cache` (7‑day TTL), `route_usage` daily cap (`ROUTES_DAILY_LIMIT`, default 300), per‑leg fallback. Legs carry `source`/`estimate`; spark `routing_source`. Flag `real_routing` default **False**; `GOOGLE_ROUTES_API_KEY` optional (falls back to Places key). No live calls made.
+- UI: leg hint "Route via Google Maps" vs "Straight-line estimate — not a road, walking or transit route"; At‑a‑glance "· routed"; adaptive disclaimer. Admin row for real_routing.
+- Tests: backend 143/143 (`test_real_routing.py` 23 — drive/walk/transit, cache hit/partial, 403/429/500/no‑route/malformed/timeout fallback, daily cap, no key, mixed, legacy legs, redaction, live flag‑off); frontend iteration 8 8/8.
+- Activation checklist (pending user approval): enable Routes API on the Cloud project, add to key restrictions (or set GOOGLE_ROUTES_API_KEY), set console per‑day quota (~400) + $5 budget alert, then flip `real_routing` in admin.
+
 ## Date Spark 2.0 — Increment 5 · Phase 1: Venue Reliability (2026‑06) ✅
 - Flag `features.venue_hours` (default on, admin row). Places field mask += `businessStatus`, `currentOpeningHours`, `utcOffsetMinutes` (same SKU tier — no new cost/credentials). New `backend/hours.py`: per‑stop `hours_status {status: open|closed|closed_permanently|closed_temporarily|unknown, confidence: confirmed (Google 7‑day window)|regular|none, detail}`; spark `hours_summary`. Engine drops CLOSED_* venues from candidates (never empties list), gives the model `hours_on_plan_day`, appends an hours rule to the system prompt only when flag on. Bug fix: `when_text` now renders the plan time in venue‑area local time (was UTC → "Sunday 12:00 AM" for a 7 PM Saturday plan).
 - UI: Timeline badges ("Open at this time" / "Closed at this time" / "Usually closed…" / "Regular hours — confirm closer to the date" / "Hours not verified" / "Permanently|Temporarily closed"), At‑a‑glance `hours-summary` row, SparkCard closed‑stop warning, disclaimer about holidays. Independent of `experience_output` (CostSummary `showCosts`/`showHours`).

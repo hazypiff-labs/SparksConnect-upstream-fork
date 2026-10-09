@@ -12,6 +12,7 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 from hours import evaluate_hours, hours_on_day, summarize as summarize_hours, to_utc
 from places import haversine_miles, search_venues
+from routing import RouteCache, route_legs, routing_source, within_days
 
 logger = logging.getLogger("recommend")
 
@@ -135,8 +136,19 @@ def compute_travel_legs(activities: list[dict], transport: str | None) -> list[d
             continue
         miles = round(haversine_miles(a["lat"], a["lng"], b["lat"], b["lng"]), 2)
         minutes = max(1, int(round(miles / speed * 60))) if miles > 0 else 0
-        legs.append({"from_index": i, "to_index": i + 1, "miles": miles, "minutes": minutes, "mode": mode, "label": f"{TRANSPORT_LABEL[mode]} · {minutes} min · {miles} mi"})
+        legs.append({"from_index": i, "to_index": i + 1, "miles": miles, "minutes": minutes, "mode": mode, "label": f"{TRANSPORT_LABEL[mode]} · {minutes} min · {miles} mi", "source": "straight_line", "estimate": True})
     return legs
+
+
+async def resolve_travel_legs(activities: list[dict], transport: str | None, scheduled_at: str | None, real_routing: bool, route_cache: RouteCache | None) -> list[dict]:
+    """Straight-line legs, upgraded leg-by-leg with provider routes when `real_routing` is on. Any leg the provider
+    cannot answer keeps its straight-line estimate (still labelled as such)."""
+    legs = compute_travel_legs(activities, transport)
+    if not real_routing or not legs:
+        return legs
+    departure = scheduled_at if within_days(scheduled_at) else None
+    routed = await route_legs(activities, transport, departure, route_cache)
+    return [routed.get(l["from_index"], l) for l in legs]
 
 
 def cost_rollup(activities: list[dict], party_size: int | None) -> dict:
@@ -254,6 +266,8 @@ async def generate_sparks(
     surprise: bool = False,
     experience: dict[str, Any] | None = None,
     venue_hours: bool = False,
+    real_routing: bool = False,
+    route_cache: RouteCache | None = None,
 ) -> list[dict]:
     experience = experience or {}
     surprise_me = bool(experience.get("surprise_me"))
@@ -339,7 +353,7 @@ async def generate_sparks(
                 }
             )
         distance_miles = first_venue.get("distance_miles") if first_venue else None
-        travel_legs = compute_travel_legs(activities, experience.get("transport"))
+        travel_legs = await resolve_travel_legs(activities, experience.get("transport"), experience.get("scheduled_at"), real_routing, route_cache)
         costs = cost_rollup(activities, experience.get("party_size"))
         hours_summary = apply_hours(activities, venue_map, experience.get("scheduled_at")) if venue_hours else None
         sparks.append(
@@ -365,6 +379,8 @@ async def generate_sparks(
                 "total_travel_minutes": sum(l["minutes"] for l in travel_legs) if travel_legs else None,
                 "total_travel_miles": round(sum(l["miles"] for l in travel_legs), 2) if travel_legs else None,
                 **costs,
+                # Real routing (Increment 5 · Phase 2) — google_routes | mixed | straight_line; None when no legs
+                "routing_source": routing_source(travel_legs),
                 # Venue reliability (Increment 5 · Phase 1) — only present when the flag is on
                 **({"hours_summary": hours_summary} if venue_hours else {}),
             }

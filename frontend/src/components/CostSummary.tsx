@@ -3,7 +3,7 @@ import { Text, View } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
 
 import type { Spark } from "@/src/api";
-import { costSummary, formatMiles, formatMinutes, formatMoney, transportEmoji, transportLabel } from "@/src/plan";
+import { costSummary, formatMiles, formatMinutes, formatMoney, isRouted, transportEmoji, transportLabel, travelDisclaimer } from "@/src/plan";
 import { fonts, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
 const useStyles = makeStyles((c) => ({
@@ -82,13 +82,14 @@ export function CostSummary({ spark, visibleStops, showHours = false, showCosts 
         <View style={s.row} testID="travel-total">
           <Text style={{ fontSize: 16 }}>{transportEmoji(legs[0].mode)}</Text>
           <Text style={s.rowText}>
-            ~{formatMinutes(travelMinutes)} · {formatMiles(travelMiles)} {transportLabel(legs[0].mode).toLowerCase()} between {partial ? "revealed " : ""}stops
+            {legs.every(isRouted) ? "" : "~"}{formatMinutes(travelMinutes)} · {formatMiles(travelMiles)} {transportLabel(legs[0].mode).toLowerCase()} between {partial ? "revealed " : ""}stops
+            {legs.every(isRouted) ? " · routed" : ""}
           </Text>
         </View>
       ) : null}
       <Text style={s.note} testID="estimate-disclaimer">
         {cost ? "Costs are estimates from the plan, not confirmed venue prices. " : ""}
-        {legs.length ? "Travel is a straight-line estimate, not a road, walking or transit route. " : ""}
+        {legs.length ? `${travelDisclaimer(legs)} ` : ""}
         {hours && hoursTotal ? "Opening hours come from Google and may not reflect holidays or special events." : ""}
       </Text>
     </View>

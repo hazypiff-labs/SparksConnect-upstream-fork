@@ -3,7 +3,7 @@ import { Linking, Pressable, Text, View } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
 
 import type { Activity, TravelLeg } from "@/src/api";
-import { formatMiles, formatMinutes, hoursBadge, stopDurationMinutes, transportEmoji, transportLabel } from "@/src/plan";
+import { formatMiles, formatMinutes, hoursBadge, isRouted, legSourceLabel, stopDurationMinutes, transportEmoji, transportLabel } from "@/src/plan";
 import { fonts, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
 const useStyles = makeStyles((c) => ({
@@ -116,8 +116,8 @@ export function Timeline({ activities, legs = [], enriched = false, showHours = 
                   <View style={[s.line, { marginTop: -spacing.lg }]} />
                 </View>
                 <View style={s.travel} testID={`itinerary-leg-${i}`}>
-                  <Text style={s.travelText}>{transportEmoji(leg.mode)} {transportLabel(leg.mode)} ~{formatMinutes(leg.minutes)} · {formatMiles(leg.miles)}</Text>
-                  <Text style={s.travelHint}>Straight-line estimate — not a road, walking or transit route</Text>
+                  <Text style={s.travelText}>{transportEmoji(leg.mode)} {transportLabel(leg.mode)} {isRouted(leg) ? "" : "~"}{formatMinutes(leg.minutes)} · {formatMiles(leg.miles)}</Text>
+                  <Text style={s.travelHint} testID={`itinerary-leg-${i}-source`}>{legSourceLabel(leg)}</Text>
                 </View>
               </View>
             ) : null}

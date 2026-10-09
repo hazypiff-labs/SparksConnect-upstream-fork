@@ -98,6 +98,9 @@ export type TravelLeg = {
   minutes: number;
   mode: string;
   label: string;
+  /** Increment 5 · Phase 2 — "google_routes" | "straight_line". Missing on older sparks = straight-line. */
+  source?: string;
+  estimate?: boolean;
 };
 
 export type Spark = {
@@ -150,6 +153,7 @@ export type Spark = {
   duration_hours?: number | null;
   transport?: string | null;
   hours_summary?: HoursSummary | null;
+  routing_source?: "google_routes" | "mixed" | "straight_line" | null;
 };
 
 export type User = {

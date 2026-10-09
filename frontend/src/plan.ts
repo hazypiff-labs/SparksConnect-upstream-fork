@@ -79,6 +79,22 @@ export function visibleLegs(legs: TravelLeg[] | null | undefined, visibleStops: 
   return (legs ?? []).filter((l) => l.to_index < visibleStops);
 }
 
+export const isRouted = (leg: TravelLeg) => leg.source === "google_routes";
+
+/** How a leg's figure was produced — shown verbatim so estimates are never mistaken for real routes. */
+export function legSourceLabel(leg: TravelLeg): string {
+  return isRouted(leg) ? "Route via Google Maps" : "Straight-line estimate — not a road, walking or transit route";
+}
+
+/** Disclaimer for a set of legs: all routed, all straight-line, or mixed. */
+export function travelDisclaimer(legs: TravelLeg[]): string | null {
+  if (!legs.length) return null;
+  const routed = legs.filter(isRouted).length;
+  if (routed === legs.length) return "Travel times are route estimates from Google Maps for the chosen mode; traffic and schedules may vary.";
+  if (routed === 0) return "Travel is a straight-line estimate, not a road, walking or transit route.";
+  return "Some legs are Google Maps route estimates; the rest are straight-line estimates, not real routes.";
+}
+
 /**
  * Cost figures we are allowed to show. Totals only exist when at least one stop carries a price;
  * per-person only when the party size is known. Unpriced stops are always surfaced, never guessed.

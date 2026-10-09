@@ -19,12 +19,14 @@ load_dotenv(ROOT_DIR / ".env")
 
 from places import geocode  # noqa: E402
 from recommend import generate_sparks  # noqa: E402
+from routing import RouteCache  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("datespark")
 
 client = AsyncIOMotorClient(os.environ["MONGO_URL"])
 db = client[os.environ["DB_NAME"]]
+route_cache = RouteCache(db)
 
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = "HS256"
@@ -44,7 +46,8 @@ DEFAULT_CONFIG = {
     ],
     "ai_settings": {"model": "claude-sonnet-4-6", "guidance": "Prioritize conversation-friendly, memorable moments."},
     # Feature flags — toggled from the admin dashboard, no redeploy needed
-    "features": {"experience_profiles": True, "experience_builder": True, "experience_output": True, "venue_hours": True},
+    # real_routing stays OFF until the Google Routes API is enabled on the project and activation is approved.
+    "features": {"experience_profiles": True, "experience_builder": True, "experience_output": True, "venue_hours": True, "real_routing": False},
 }
 
 app = FastAPI(title="Date Spark API")
@@ -278,6 +281,7 @@ async def startup():
     await db.users.create_index("apple_sub", unique=True, sparse=True)
     await db.sparks.create_index([("owner_type", 1), ("owner_id", 1), ("created_at", -1)])
     await db.sparks.create_index("id", unique=True)
+    await route_cache.ensure_indexes()
     await db.saved_sparks.create_index([("owner_type", 1), ("owner_id", 1), ("spark_id", 1)])
     await db.analytics_events.create_index([("event", 1), ("created_at", -1)])
     admin_email = os.environ.get("ADMIN_EMAIL", "").lower()
@@ -586,6 +590,8 @@ async def generate(
             ai_settings=cfg.get("ai_settings", {}),
             experience=data.experience_context(),
             venue_hours=cfg.get("features", {}).get("venue_hours", True),
+            real_routing=cfg.get("features", {}).get("real_routing", False),
+            route_cache=route_cache,
         )
     except Exception as exc:
         logger.exception("Spark generation failed")
@@ -659,7 +665,7 @@ async def my_sparks(ident: Annotated[Identity, Depends(identity)]):
 
 
 # Engine output fields (Increment 1 data, Increment 4 UI) — additive; older sparks simply lack them.
-OUTPUT_FIELDS = ("travel_legs", "total_travel_minutes", "total_travel_miles", "total_estimated_cost", "per_person_cost", "priced_stops", "unpriced_stops", "complete", "hours_summary")
+OUTPUT_FIELDS = ("travel_legs", "total_travel_minutes", "total_travel_miles", "total_estimated_cost", "per_person_cost", "priced_stops", "unpriced_stops", "complete", "hours_summary", "routing_source")
 PLAN_INPUT_FIELDS = ("experience_type", "party_size", "budget_amount", "duration_hours", "transport")
 
 
