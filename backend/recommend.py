@@ -5,11 +5,12 @@ import logging
 import os
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
+from hours import evaluate_hours, hours_on_day, summarize as summarize_hours, to_utc
 from places import haversine_miles, search_venues
 
 logger = logging.getLogger("recommend")
@@ -88,6 +89,23 @@ Return ONLY valid JSON (no markdown) with this exact shape:
 Produce exactly 3 sparks. Normal mode: 2-4 activities each. OCCASION mode: 3-5 activities with occasion-specific touches (a toast, a keepsake, a photo moment, a meaningful closing stop). SURPRISE mode: the first activity is the meeting point (clear time + place); the description must be a teaser that does not spoil later stops; include a dress_code. SURPRISE_ME mode: the person gave only budget/time/company and wants you to choose the vibe — pick a bold, well-matched theme per spark and vary the three strongly. Activities always in chronological order.
 When EXPERIENCE DETAILS are provided: respect party_size (group-friendly venues, costs are totals for the whole party), fit the whole plan inside duration_hours, keep the total within budget_amount when given, weave in the listed interests, and space stops for the transport mode (walking plans stay within ~1 mile between stops)."""
 
+# Appended to the system prompt only when the `venue_hours` flag is on (keeps the legacy prompt byte-identical when off).
+HOURS_RULE = "\nWhen venues carry hours_on_plan_day: never schedule a stop at a venue outside those hours or on a day it lists as closed; prefer venues whose hours are known; if you must use a venue whose hours are Unknown, set needs_verification true for that stop."
+
+
+def apply_hours(activities: list[dict], venue_map: dict[str, dict], scheduled_at: str | None) -> dict:
+    """Stamp each activity with `hours_status` and return the spark-level roll-up. Unmatched venues → unknown."""
+    plan_start = to_utc(scheduled_at)
+    for a in activities:
+        a["hours_status"] = evaluate_hours(venue_map.get(a.get("venue_id") or ""), plan_start, a.get("start_time"), a.get("end_time"))
+    return summarize_hours(activities)
+
+
+def drop_closed_venues(venues: list[dict]) -> list[dict]:
+    """Exclude venues Google explicitly marks closed. Never empties the list: if everything is flagged, keep the originals."""
+    kept = [v for v in venues if v.get("business_status") not in ("CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY")]
+    return kept or venues
+
 
 def parse_cost(text: str | None) -> float | None:
     """Best-effort USD parse of model/venue cost strings like "$35", "$25–$50" (midpoint), "Free". None if unknown."""
@@ -136,12 +154,16 @@ def cost_rollup(activities: list[dict], party_size: int | None) -> dict:
     return {"total_estimated_cost": total, "per_person_cost": per_person, "priced_stops": len(known), "unpriced_stops": unknown, "complete": unknown == 0 and bool(known)}
 
 
-def when_text(scheduled_at: str | None, date_label: str | None, time_label: str | None) -> str:
-    """Human-readable 'when' for the prompt. A concrete scheduled_at wins so the model can respect opening hours."""
+def when_text(scheduled_at: str | None, date_label: str | None, time_label: str | None, utc_offset_minutes: int | None = None) -> str:
+    """Human-readable 'when' for the prompt. A concrete scheduled_at wins so the model can respect opening hours.
+    Rendered in the venue area's local time when the offset is known (from Places) — otherwise a 7 PM Saturday
+    plan in Austin would read as 'Sunday 12:00 AM'. Without venues there are no hours to respect, so UTC is kept."""
     if scheduled_at:
         try:
             dt = datetime.fromisoformat(str(scheduled_at).replace("Z", "+00:00"))
-            return dt.strftime("%A %B %-d, %-I:%M %p") + " (plan stops so venues are open at these times)"
+            if utc_offset_minutes is not None:
+                dt = dt.astimezone(timezone.utc) + timedelta(minutes=utc_offset_minutes)
+            return dt.strftime("%A %B %-d, %-I:%M %p") + (" local time" if utc_offset_minutes is not None else "") + " (plan stops so venues are open at these times)"
         except ValueError:
             pass
     return " ".join(x for x in [date_label, time_label] if x) or "not chosen yet"
@@ -186,8 +208,8 @@ async def gather_venues(lat: float, lng: float, radius_miles: float, vibes: list
     return list(venues.values())[:24]
 
 
-def _venue_brief(v: dict) -> dict:
-    return {
+def _venue_brief(v: dict, plan_start: datetime | None = None, with_hours: bool = False) -> dict:
+    brief = {
         "venue_id": v["id"],
         "name": v["name"],
         "address": v["address"],
@@ -197,6 +219,10 @@ def _venue_brief(v: dict) -> dict:
         "open_hours": (v.get("hours") or [])[:7],
         "types": v.get("types"),
     }
+    if with_hours:
+        hint = hours_on_day(v, plan_start)
+        brief["hours_on_plan_day"] = hint["text"] + ("" if hint["confidence"] == "confirmed" else f" ({hint['confidence']} hours)" if hint["confidence"] == "regular" else "")
+    return brief
 
 
 def _extract_json(text: str) -> dict:
@@ -227,6 +253,7 @@ async def generate_sparks(
     occasion: str | None = None,
     surprise: bool = False,
     experience: dict[str, Any] | None = None,
+    venue_hours: bool = False,
 ) -> list[dict]:
     experience = experience or {}
     surprise_me = bool(experience.get("surprise_me"))
@@ -237,7 +264,13 @@ async def generate_sparks(
     venue_vibes = vibes or (list(VIBE_QUERIES.keys()) if surprise_me else [])
     if lat is not None and lng is not None:
         venues = await gather_venues(lat, lng, radius_miles, venue_vibes)
+    # Venue reliability: never offer venues Google marks closed (safe — keeps the list if all are flagged).
+    if venue_hours:
+        venues = drop_closed_venues(venues)
     venue_map = {v["id"]: v for v in venues}
+    plan_start = to_utc(experience.get("scheduled_at"))
+    # Local UTC offset of the venue area (from Places) so the plan time is described in local time, not UTC.
+    area_offset = next((v["utc_offset_minutes"] for v in venues if v.get("utc_offset_minutes") is not None), None)
 
     context = {
         "spending_time_with": RELATIONSHIP_TEXT.get(relationship_type, relationship_type),
@@ -245,7 +278,7 @@ async def generate_sparks(
         "budget": BUDGET_TEXT.get(budget, budget),
         "max_travel_miles": radius_miles,
         "location_label": location.get("label") or "their area",
-        "when": when_text(experience.get("scheduled_at"), date_label, time_label),
+        "when": when_text(experience.get("scheduled_at"), date_label, time_label, area_offset),
         "user_favorite_vibes": history.get("favorite_vibes", []),
         "recently_saved_titles": history.get("saved_titles", [])[:5],
         "avoid_titles": exclude_titles[:12],
@@ -264,7 +297,7 @@ async def generate_sparks(
     prompt = (
         "CONTEXT:\n" + json.dumps(context, ensure_ascii=False)
         + "\n\nVENUES (real data, reference by venue_id only):\n"
-        + json.dumps([_venue_brief(v) for v in venues], ensure_ascii=False)
+        + json.dumps([_venue_brief(v, plan_start, venue_hours) for v in venues], ensure_ascii=False)
         + ("\n\nNo venue data is available; design activity-based plans with venue_id null and needs_verification true." if not venues else "")
         + "\n\nDesign 3 Sparks now."
     )
@@ -272,7 +305,7 @@ async def generate_sparks(
     chat = LlmChat(
         api_key=os.environ["EMERGENT_LLM_KEY"],
         session_id=f"spark-{uuid.uuid4()}",
-        system_message=SYSTEM_PROMPT,
+        system_message=SYSTEM_PROMPT + (HOURS_RULE if venue_hours else ""),
     ).with_model("anthropic", ai_settings.get("model", "claude-sonnet-4-6"))
     raw = await chat.send_message(UserMessage(text=prompt))
     data = _extract_json(raw if isinstance(raw, str) else str(raw))
@@ -308,6 +341,7 @@ async def generate_sparks(
         distance_miles = first_venue.get("distance_miles") if first_venue else None
         travel_legs = compute_travel_legs(activities, experience.get("transport"))
         costs = cost_rollup(activities, experience.get("party_size"))
+        hours_summary = apply_hours(activities, venue_map, experience.get("scheduled_at")) if venue_hours else None
         sparks.append(
             {
                 "title": s.get("title") or "A Spark",
@@ -331,6 +365,8 @@ async def generate_sparks(
                 "total_travel_minutes": sum(l["minutes"] for l in travel_legs) if travel_legs else None,
                 "total_travel_miles": round(sum(l["miles"] for l in travel_legs), 2) if travel_legs else None,
                 **costs,
+                # Venue reliability (Increment 5 · Phase 1) — only present when the flag is on
+                **({"hours_summary": hours_summary} if venue_hours else {}),
             }
         )
     return sparks

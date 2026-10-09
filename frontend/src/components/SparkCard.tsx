@@ -28,11 +28,12 @@ const useStyles = makeStyles((c) => ({
   verifyText: { fontFamily: fonts.text, fontSize: 12, color: c.warning, fontWeight: "600" },
 }));
 
-export function SparkCard({ spark, index, onView, glance = false }: { spark: Spark; index: number; onView: () => void; glance?: boolean }) {
+export function SparkCard({ spark, index, onView, glance = false, hoursWarning = false }: { spark: Spark; index: number; onView: () => void; glance?: boolean; hoursWarning?: boolean }) {
   const s = useStyles();
   const { colors } = useTheme();
   const meta = [spark.vibe_tags?.slice(0, 2).join(" • ") || spark.primary_vibe, spark.estimated_cost, spark.estimated_duration].filter(Boolean).join(" • ");
   const glanceText = glance ? glanceLine(spark) : null;
+  const closed = hoursWarning ? spark.hours_summary?.closed ?? 0 : 0;
   return (
     <Animated.View entering={FadeInUp.delay(index * 120).duration(480)}>
       <Pressable testID={`spark-card-${index}`} onPress={onView} style={s.card}>
@@ -53,6 +54,12 @@ export function SparkCard({ spark, index, onView, glance = false }: { spark: Spa
             <Text style={s.whyLabel}>WHY WE PICKED IT</Text>
             <Text style={s.whyText} numberOfLines={3}>{spark.why}</Text>
           </View>
+          {closed > 0 ? (
+            <View style={s.verify} testID={`spark-card-${index}-hours-warning`}>
+              <Ionicons name="time" size={14} color={colors.warning} />
+              <Text style={s.verifyText}>{closed} {closed === 1 ? "stop appears" : "stops appear"} closed at your time — check before you go</Text>
+            </View>
+          ) : null}
           {spark.needs_verification ? (
             <View style={s.verify}>
               <Ionicons name="alert-circle" size={14} color={colors.warning} />

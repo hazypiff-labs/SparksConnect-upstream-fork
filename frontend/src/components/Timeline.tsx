@@ -3,7 +3,7 @@ import { Linking, Pressable, Text, View } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
 
 import type { Activity, TravelLeg } from "@/src/api";
-import { formatMiles, formatMinutes, stopDurationMinutes, transportEmoji, transportLabel } from "@/src/plan";
+import { formatMiles, formatMinutes, hoursBadge, stopDurationMinutes, transportEmoji, transportLabel } from "@/src/plan";
 import { fonts, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
 const useStyles = makeStyles((c) => ({
@@ -29,6 +29,13 @@ const useStyles = makeStyles((c) => ({
   travel: { flex: 1, gap: 2, marginBottom: spacing.lg, marginTop: -spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.md, backgroundColor: c.surfaceTertiary },
   travelText: { fontFamily: fonts.text, fontSize: 12, fontWeight: "700", color: c.onSurfaceTertiary },
   travelHint: { fontFamily: fonts.text, fontSize: 11, color: c.muted },
+  // Opening-hours badge (Increment 5 · Phase 1)
+  hours: { flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start", paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.pill, marginTop: 6 },
+  hoursGood: { backgroundColor: c.brandTertiary },
+  hoursWarn: { backgroundColor: c.info },
+  hoursNeutral: { backgroundColor: c.surfaceTertiary },
+  hoursText: { fontFamily: fonts.text, fontSize: 12, fontWeight: "700" },
+  hoursHint: { fontFamily: fonts.text, fontSize: 11, color: c.muted, marginTop: 2 },
 }));
 
 type Props = {
@@ -37,17 +44,23 @@ type Props = {
   legs?: TravelLeg[];
   /** Increment 4 enrichments (durations, travel, unpriced labels). Off = original Timeline. */
   enriched?: boolean;
+  /** Increment 5 · Phase 1 — show verified opening-hours badges when a stop carries `hours_status`. */
+  showHours?: boolean;
 };
 
-export function Timeline({ activities, legs = [], enriched = false }: Props) {
+export function Timeline({ activities, legs = [], enriched = false, showHours = false }: Props) {
   const s = useStyles();
   const { colors } = useTheme();
   const legAfter = (i: number) => legs.find((l) => l.from_index === i && l.to_index === i + 1);
+  const toneStyle = { good: s.hoursGood, warn: s.hoursWarn, neutral: s.hoursNeutral } as const;
+  const toneColor = { good: colors.onBrandTertiary, warn: colors.warning, neutral: colors.onSurfaceTertiary } as const;
+  const toneIcon = { good: "checkmark-circle", warn: "alert-circle", neutral: "help-circle" } as const;
   return (
     <View testID="spark-itinerary">
       {activities.map((a, i) => {
         const duration = enriched && !a.locked ? stopDurationMinutes(a.start_time, a.end_time) : null;
         const leg = enriched && !a.locked && !activities[i + 1]?.locked ? legAfter(i) : undefined;
+        const badge = showHours && !a.locked ? hoursBadge(a.hours_status) : null;
         return (
           <React.Fragment key={i}>
             <View style={s.row} testID={`itinerary-step-${i}`}>
@@ -71,6 +84,15 @@ export function Timeline({ activities, legs = [], enriched = false }: Props) {
                     {a.venue ? <Text style={s.venue}>{a.venue}</Text> : null}
                     {a.address ? <Text style={s.address}>{a.address}</Text> : null}
                     {a.note ? <Text style={s.note}>{a.note}</Text> : null}
+                    {badge ? (
+                      <View testID={`itinerary-step-${i}-hours`} accessibilityLabel={badge.hint ?? badge.text}>
+                        <View style={[s.hours, toneStyle[badge.tone]]}>
+                          <Ionicons name={toneIcon[badge.tone]} size={13} color={toneColor[badge.tone]} />
+                          <Text style={[s.hoursText, { color: toneColor[badge.tone] }]} testID={`itinerary-step-${i}-hours-text`}>{badge.text}</Text>
+                        </View>
+                        {badge.hint && badge.hint !== badge.text ? <Text style={s.hoursHint}>{badge.hint}</Text> : null}
+                      </View>
+                    ) : null}
                     <View style={s.metaRow}>
                       {a.estimated_cost ? <Text style={s.meta}>{enriched ? `~${a.estimated_cost}` : a.estimated_cost}</Text> : enriched ? <Text style={s.unpriced} testID={`itinerary-step-${i}-unpriced`}>Price not listed</Text> : null}
                       {a.end_time ? <Text style={s.meta}>until {a.end_time}</Text> : null}

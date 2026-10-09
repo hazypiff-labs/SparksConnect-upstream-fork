@@ -18,6 +18,7 @@ const FLAGS = [
   { key: "experience_profiles", id: "experience-profiles", label: "Experience Profiles (Couple · Friends · Family · Celebration · Travel · Solo)" },
   { key: "experience_builder", id: "experience-builder", label: "Experience Builder (party size · exact budget · interests · when · duration · transport · Surprise me)" },
   { key: "experience_output", id: "experience-output", label: "Experience Output (itinerary travel legs · cost summary · results summary chips)" },
+  { key: "venue_hours", id: "venue-hours", label: "Venue Hours (verify opening hours for the planned time · hide closed venues)" },
 ];
 
 const useStyles = makeStyles((c) => ({

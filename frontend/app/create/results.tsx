@@ -48,7 +48,7 @@ export default function Results() {
   const queryClient = useQueryClient();
   const { draft, update } = useWizard();
   const { isPremium } = useSession();
-  const { output } = useFeatures();
+  const { output, hours } = useFeatures();
   const started = useRef(false);
   const scheduled = computeScheduledAt(draft.dateLabel, draft.timeLabel, draft.customDate);
   const scheduledIso = scheduled ? scheduled.toISOString() : null;
@@ -180,7 +180,7 @@ export default function Results() {
         <>
           <ScrollView contentContainerStyle={s.list} showsVerticalScrollIndicator={false}>
             {draft.results.map((sp, i) => (
-              <SparkCard key={sp.id} spark={sp} index={i} glance={output} onView={() => router.push(`/spark/${sp.id}`)} />
+              <SparkCard key={sp.id} spark={sp} index={i} glance={output} hoursWarning={hours} onView={() => router.push(`/spark/${sp.id}`)} />
             ))}
           </ScrollView>
           <StickyFooter>

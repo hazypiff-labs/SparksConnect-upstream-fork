@@ -61,6 +61,15 @@ export function track(event: string, props: Record<string, unknown> = {}) {
   api("/events", { method: "POST", json: { event, props } }).catch(() => {});
 }
 
+export type HoursStatus = {
+  status: "open" | "closed" | "closed_permanently" | "closed_temporarily" | "unknown";
+  confidence: "confirmed" | "regular" | "none";
+  detail: string;
+  source: string;
+  checked_for?: string;
+  closes_before_end?: boolean;
+};
+
 export type Activity = {
   activity_name: string;
   venue: string | null;
@@ -76,7 +85,11 @@ export type Activity = {
   note: string | null;
   verified: boolean;
   locked?: boolean;
+  /** Venue reliability (Increment 5 · Phase 1). Absent on older sparks or when the flag was off. */
+  hours_status?: HoursStatus | null;
 };
+
+export type HoursSummary = { confirmed_open: number; regular_open: number; closed: number; unverified: number };
 
 export type TravelLeg = {
   from_index: number;
@@ -136,6 +149,7 @@ export type Spark = {
   budget_amount?: number | null;
   duration_hours?: number | null;
   transport?: string | null;
+  hours_summary?: HoursSummary | null;
 };
 
 export type User = {

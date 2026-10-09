@@ -30,7 +30,8 @@ STOPS = [
 
 # ---------------------------------------------------------------- unit
 def test_output_flag_defaults_on_alongside_existing_flags():
-    assert DEFAULT_CONFIG["features"] == {"experience_profiles": True, "experience_builder": True, "experience_output": True}
+    f = DEFAULT_CONFIG["features"]
+    assert f["experience_profiles"] is True and f["experience_builder"] is True and f["experience_output"] is True
 
 
 def test_cost_rollup_distinguishes_priced_and_unpriced_without_inventing():
@@ -69,7 +70,7 @@ def test_locked_recipient_loses_travel_and_cost_fields():
     assert out["travel_legs"] == []
     for k in OUTPUT_FIELDS:
         if k != "travel_legs":
-            assert out[k] is None, k
+            assert out.get(k) is None, k
     assert out["meet_place"] == "1 Main St"  # the meeting point is still shared
 
 
@@ -106,14 +107,14 @@ def test_output_flag_public_and_independently_toggleable(s, admin_headers):
     assert pub["experience_output"] is True
     try:
         off = s.put(f"{API}/admin/config", headers=admin_headers, json={"features": {"experience_output": False}}).json()["features"]
-        assert off == {"experience_profiles": True, "experience_builder": True, "experience_output": False}
+        assert (off["experience_profiles"], off["experience_builder"], off["experience_output"]) == (True, True, False)
         assert s.get(f"{API}/config/public").json()["features"]["experience_output"] is False
         # flipping the others leaves output alone
         mixed = s.put(f"{API}/admin/config", headers=admin_headers, json={"features": {"experience_builder": False}}).json()["features"]
-        assert mixed == {"experience_profiles": True, "experience_builder": False, "experience_output": False}
+        assert (mixed["experience_profiles"], mixed["experience_builder"], mixed["experience_output"]) == (True, False, False)
     finally:
         on = s.put(f"{API}/admin/config", headers=admin_headers, json={"features": {"experience_profiles": True, "experience_builder": True, "experience_output": True}}).json()["features"]
-        assert on == {"experience_profiles": True, "experience_builder": True, "experience_output": True}
+        assert (on["experience_profiles"], on["experience_builder"], on["experience_output"]) == (True, True, True)
 
 
 def test_shared_endpoint_exposes_output_fields_and_redacts_locked_surprise(s):

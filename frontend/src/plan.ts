@@ -1,5 +1,25 @@
-import type { Spark, TravelLeg } from "@/src/api";
+import type { HoursStatus, Spark, TravelLeg } from "@/src/api";
 import { DURATIONS, TRANSPORTS } from "@/src/constants";
+
+export type HoursTone = "good" | "warn" | "neutral";
+
+/** User-facing badge for a stop's verified hours. Never implies certainty the data lacks. */
+export function hoursBadge(h: HoursStatus | null | undefined): { text: string; tone: HoursTone; hint?: string } | null {
+  if (!h) return null;
+  switch (h.status) {
+    case "closed_permanently":
+      return { text: "Permanently closed", tone: "warn" };
+    case "closed_temporarily":
+      return { text: "Temporarily closed", tone: "warn" };
+    case "closed":
+      return { text: h.confidence === "confirmed" ? "Closed at this time" : "Usually closed at this time", tone: "warn", hint: h.detail };
+    case "open":
+      if (h.confidence === "confirmed") return { text: h.closes_before_end ? "Open · closes before this stop ends" : "Open at this time", tone: h.closes_before_end ? "warn" : "good", hint: h.detail };
+      return { text: "Regular hours — confirm closer to the date", tone: "neutral", hint: h.detail };
+    default:
+      return { text: "Hours not verified", tone: "neutral" };
+  }
+}
 
 /** "6:00 PM" → minutes since midnight, or null when unparseable. */
 export function parseClock(text: string | null | undefined): number | null {

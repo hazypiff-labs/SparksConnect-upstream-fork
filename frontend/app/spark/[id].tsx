@@ -61,7 +61,7 @@ export default function SparkDetail() {
   const toast = useToast();
   const queryClient = useQueryClient();
   const { user } = useSession();
-  const { output } = useFeatures();
+  const { output, hours } = useFeatures();
 
   const spark = useQuery({ queryKey: ["sparks", id], queryFn: () => api<Spark>(`/sparks/${id}`), enabled: !!id });
 
@@ -261,8 +261,8 @@ export default function SparkDetail() {
           </View>
 
           <Text style={s.sectionTitle}>{sp.surprise && isOwner ? `Itinerary · ${revealed}/${total} revealed` : "Suggested itinerary"}</Text>
-          <Timeline activities={visibleActivities} legs={legs} enriched={output} />
-          {output ? <CostSummary spark={sp} visibleStops={revealed} /> : null}
+          <Timeline activities={visibleActivities} legs={legs} enriched={output} showHours={hours} />
+          {output || hours ? <CostSummary spark={sp} visibleStops={revealed} showHours={hours} showCosts={output} /> : null}
           </View>
           )}
 

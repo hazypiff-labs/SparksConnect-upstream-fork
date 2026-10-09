@@ -16,7 +16,9 @@ logger = logging.getLogger("places")
 PLACES_FIELDS = (
     "places.id,places.displayName,places.formattedAddress,places.location,"
     "places.regularOpeningHours,places.priceLevel,places.rating,"
-    "places.userRatingCount,places.types,places.googleMapsUri,places.websiteUri"
+    "places.userRatingCount,places.types,places.googleMapsUri,places.websiteUri,"
+    # Venue reliability (Increment 5 · Phase 1). Same SKU tier as regularOpeningHours — no added cost.
+    "places.businessStatus,places.currentOpeningHours,places.utcOffsetMinutes"
 )
 
 PRICE_LEVEL_LABEL = {
@@ -51,6 +53,11 @@ def _normalize(place: dict[str, Any], lat: float, lng: float) -> dict[str, Any]:
         "rating_count": place.get("userRatingCount"),
         "price_level": PRICE_LEVEL_LABEL.get(place.get("priceLevel") or "", None),
         "hours": hours,
+        # Structured hours for verification (see hours.py). Absent/None when Google has no data.
+        "periods": (place.get("regularOpeningHours") or {}).get("periods"),
+        "current_periods": (place.get("currentOpeningHours") or {}).get("periods"),
+        "business_status": place.get("businessStatus"),
+        "utc_offset_minutes": place.get("utcOffsetMinutes"),
         "types": place.get("types", [])[:4],
         "maps_url": place.get("googleMapsUri"),
         "website": place.get("websiteUri"),

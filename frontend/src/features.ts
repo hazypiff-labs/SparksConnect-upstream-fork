@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/src/api";
 
-type Features = { experience_profiles?: boolean; experience_builder?: boolean; experience_output?: boolean };
+type Features = { experience_profiles?: boolean; experience_builder?: boolean; experience_output?: boolean; venue_hours?: boolean };
 
 /**
  * Feature flags from app_config (admin-editable).
@@ -20,5 +20,7 @@ export function useFeatures() {
     builder: ready && f.experience_builder !== false,
     /** Increment 4 — itinerary travel legs, cost summary, results summary chips. */
     output: ready && f.experience_output !== false,
+    /** Increment 5 · Phase 1 — per-stop opening-hours verification badges. */
+    hours: ready && f.venue_hours !== false,
   };
 }

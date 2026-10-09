@@ -23,19 +23,36 @@ const useStyles = makeStyles((c) => ({
  * Cost + travel roll-up for one Spark. Renders nothing when there is no supporting data.
  * Totals are the sum of the plan's per-stop estimates; unpriced stops are called out, never guessed.
  */
-export function CostSummary({ spark, visibleStops }: { spark: Spark; visibleStops: number }) {
+export function CostSummary({ spark, visibleStops, showHours = false, showCosts = true }: { spark: Spark; visibleStops: number; showHours?: boolean; showCosts?: boolean }) {
   const s = useStyles();
   const { colors } = useTheme();
-  const cost = costSummary(spark);
-  const legs = (spark.travel_legs ?? []).filter((l) => l.to_index < visibleStops);
+  const cost = showCosts ? costSummary(spark) : null;
+  const legs = showCosts ? (spark.travel_legs ?? []).filter((l) => l.to_index < visibleStops) : [];
   const travelMinutes = legs.reduce((sum, l) => sum + l.minutes, 0);
   const travelMiles = legs.reduce((sum, l) => sum + l.miles, 0);
   const partial = visibleStops < (spark.activities?.length ?? 0);
-  if (!cost && legs.length === 0) return null;
+  const hours = showHours ? spark.hours_summary ?? null : null;
+  const hoursTotal = hours ? hours.confirmed_open + hours.regular_open + hours.closed + hours.unverified : 0;
+  if (!cost && legs.length === 0 && !hoursTotal) return null;
 
   return (
     <View style={s.card} testID="cost-summary">
       <Text style={s.title}>AT A GLANCE</Text>
+      {hours && hoursTotal ? (
+        <View style={s.row} testID="hours-summary">
+          <Ionicons name={hours.closed ? "alert-circle" : hours.confirmed_open === hoursTotal ? "checkmark-circle" : "time"} size={16} color={hours.closed ? colors.warning : hours.confirmed_open === hoursTotal ? colors.success : colors.onSurfaceTertiary} />
+          <Text style={[s.rowText, hours.closed ? { color: colors.warning, fontWeight: "600" } : null]}>
+            {[
+              hours.confirmed_open ? `${hours.confirmed_open} of ${hoursTotal} stops confirmed open` : null,
+              hours.regular_open ? `${hours.regular_open} on regular hours — confirm closer to the date` : null,
+              hours.closed ? `${hours.closed} ${hours.closed === 1 ? "appears" : "appear"} closed at your time` : null,
+              hours.unverified ? `${hours.unverified} not verified` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </Text>
+        </View>
+      ) : null}
       {cost ? (
         <View style={s.figures}>
           <View style={s.figure}>
@@ -71,7 +88,8 @@ export function CostSummary({ spark, visibleStops }: { spark: Spark; visibleStop
       ) : null}
       <Text style={s.note} testID="estimate-disclaimer">
         {cost ? "Costs are estimates from the plan, not confirmed venue prices. " : ""}
-        {legs.length ? "Travel is a straight-line estimate, not a road, walking or transit route." : ""}
+        {legs.length ? "Travel is a straight-line estimate, not a road, walking or transit route. " : ""}
+        {hours && hoursTotal ? "Opening hours come from Google and may not reflect holidays or special events." : ""}
       </Text>
     </View>
   );

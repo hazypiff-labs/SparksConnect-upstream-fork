@@ -44,7 +44,7 @@ DEFAULT_CONFIG = {
     ],
     "ai_settings": {"model": "claude-sonnet-4-6", "guidance": "Prioritize conversation-friendly, memorable moments."},
     # Feature flags — toggled from the admin dashboard, no redeploy needed
-    "features": {"experience_profiles": True, "experience_builder": True, "experience_output": True},
+    "features": {"experience_profiles": True, "experience_builder": True, "experience_output": True, "venue_hours": True},
 }
 
 app = FastAPI(title="Date Spark API")
@@ -585,6 +585,7 @@ async def generate(
             surprise=data.surprise,
             ai_settings=cfg.get("ai_settings", {}),
             experience=data.experience_context(),
+            venue_hours=cfg.get("features", {}).get("venue_hours", True),
         )
     except Exception as exc:
         logger.exception("Spark generation failed")
@@ -658,7 +659,7 @@ async def my_sparks(ident: Annotated[Identity, Depends(identity)]):
 
 
 # Engine output fields (Increment 1 data, Increment 4 UI) — additive; older sparks simply lack them.
-OUTPUT_FIELDS = ("travel_legs", "total_travel_minutes", "total_travel_miles", "total_estimated_cost", "per_person_cost", "priced_stops", "unpriced_stops", "complete")
+OUTPUT_FIELDS = ("travel_legs", "total_travel_minutes", "total_travel_miles", "total_estimated_cost", "per_person_cost", "priced_stops", "unpriced_stops", "complete", "hours_summary")
 PLAN_INPUT_FIELDS = ("experience_type", "party_size", "budget_amount", "duration_hours", "transport")
 
 
