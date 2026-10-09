@@ -101,3 +101,7 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+## Verification pass — Increment 3 (2026-06, main agent)
+- Fixed feature-flag initialization: `src/features.ts` now exposes `ready`; `(tabs)/create.tsx`, `create/vibe.tsx`, `create/budget.tsx`, `create/distance.tsx` render `FeaturesLoading` (testIDs `create-*-loading`) until `/api/config/public` settles, so Builder/Profiles UI can never flash when a flag is OFF. Who-step header now shows 1/5 when builder is ON.
+- New backend tests `tests/test_builder_engine_influence.py` (prompt capture with LLM mocked + live generation). Full suite 91/91.
+- Needs frontend E2E: builder flag OFF (via PUT /api/admin/config as admin) restores original 4-step flow; ON restores 5-step flow; no loading spinner stuck; legacy Couple flow intact. Flags must be left ON at the end.

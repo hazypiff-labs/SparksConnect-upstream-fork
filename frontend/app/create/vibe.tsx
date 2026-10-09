@@ -4,7 +4,7 @@ import { useRouter } from "expo-router";
 import Ionicons from "@react-native-vector-icons/ionicons";
 
 import { track } from "@/src/api";
-import { Button, Chip, OptionCard, StepHeader, StickyFooter, useToast } from "@/src/components/ui";
+import { Button, Chip, FeaturesLoading, OptionCard, StepHeader, StickyFooter, useToast } from "@/src/components/ui";
 import { VIBES, interestsFor, profileFor } from "@/src/constants";
 import { useFeatures } from "@/src/features";
 import { fonts, makeStyles, spacing, useTheme } from "@/src/theme";
@@ -25,12 +25,14 @@ export default function VibeStep() {
   const router = useRouter();
   const toast = useToast();
   const { draft, update } = useWizard();
-  const { builder } = useFeatures();
+  const { builder, ready } = useFeatures();
   const [showInterests, setShowInterests] = useState(draft.interests.length > 0);
   const profileKey = profileFor(draft.experienceType).key;
 
   const toggle = (key: string) => update({ vibes: draft.vibes.includes(key) ? draft.vibes.filter((v) => v !== key) : [...draft.vibes, key] });
   const toggleInterest = (i: string) => update({ interests: draft.interests.includes(i) ? draft.interests.filter((x) => x !== i) : [...draft.interests, i].slice(0, 8) });
+
+  if (!ready) return <FeaturesLoading testID="create-vibe-loading" />;
 
   return (
     <View style={s.root} testID="create-vibe-screen">

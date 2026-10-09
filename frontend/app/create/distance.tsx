@@ -7,7 +7,7 @@ import Ionicons from "@react-native-vector-icons/ionicons";
 import { KeyboardAwareScrollView, KeyboardStickyView } from "react-native-keyboard-controller";
 
 import { api, track } from "@/src/api";
-import { Button, StepHeader, StickyFooter, useToast } from "@/src/components/ui";
+import { Button, FeaturesLoading, StepHeader, StickyFooter, useToast } from "@/src/components/ui";
 import { DISTANCES, profileFor } from "@/src/constants";
 import { useFeatures } from "@/src/features";
 import { useSession } from "@/src/session";
@@ -45,7 +45,7 @@ export default function DistanceStep() {
   const toast = useToast();
   const { draft, update } = useWizard();
   const { isPremium } = useSession();
-  const { builder } = useFeatures();
+  const { builder, ready } = useFeatures();
   const [manual, setManual] = useState("");
 
   const toggleSurprise = (on: boolean) => {
@@ -106,6 +106,8 @@ export default function DistanceStep() {
   };
 
   const canContinue = !!draft.distance && !!draft.location;
+
+  if (!ready) return <FeaturesLoading testID="create-distance-loading" />;
 
   return (
     <View style={s.root} testID="create-distance-screen">

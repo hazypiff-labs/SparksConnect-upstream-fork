@@ -5,7 +5,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import Ionicons from "@react-native-vector-icons/ionicons";
 
 import { track } from "@/src/api";
-import { Button, Chip, OptionCard, StepHeader, StickyFooter, useToast } from "@/src/components/ui";
+import { Button, Chip, FeaturesLoading, OptionCard, StepHeader, StickyFooter, useToast } from "@/src/components/ui";
 import { EXPERIENCE_PROFILES, OCCASIONS, PARTY_DEFAULTS, profileFor, relationshipOption } from "@/src/constants";
 import { useFeatures } from "@/src/features";
 import { useSession } from "@/src/session";
@@ -72,9 +72,12 @@ export default function WhoStep() {
 
   const cards = (profile.relationships ?? []).map(relationshipOption).filter((r): r is NonNullable<typeof r> => !!r);
 
+  // Wait for app_config before deciding which experience UI to render (no flash of Builder/Profiles UI when a flag is OFF).
+  if (!features.ready) return <FeaturesLoading testID="create-who-loading" />;
+
   return (
     <View style={s.root} testID="create-who-screen">
-      <StepHeader step={1} total={4} title={profile.headline} subtitle={profile.subtitle} testID="who-header" onBack={router.canGoBack() ? () => router.back() : undefined} />
+      <StepHeader step={1} total={builderEnabled ? 5 : 4} title={profile.headline} subtitle={profile.subtitle} testID="who-header" onBack={router.canGoBack() ? () => router.back() : undefined} />
       <ScrollView contentContainerStyle={{ paddingBottom: spacing.xl }}>
         {profilesEnabled ? (
           <View style={{ marginBottom: spacing.md }} testID="experience-profile-section">

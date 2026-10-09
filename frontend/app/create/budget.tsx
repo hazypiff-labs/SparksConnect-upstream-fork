@@ -7,7 +7,7 @@ import Animated, { FadeInDown } from "react-native-reanimated";
 import { KeyboardAwareScrollView, KeyboardStickyView } from "react-native-keyboard-controller";
 
 import { track } from "@/src/api";
-import { Button, Chip, StepHeader, StickyFooter, useToast } from "@/src/components/ui";
+import { Button, Chip, FeaturesLoading, StepHeader, StickyFooter, useToast } from "@/src/components/ui";
 import { BUDGETS, QUICK_AMOUNTS, tierForAmount } from "@/src/constants";
 import { useFeatures } from "@/src/features";
 import { fonts, makeStyles, radius, spacing, useTheme } from "@/src/theme";
@@ -37,7 +37,7 @@ export default function BudgetStep() {
   const router = useRouter();
   const toast = useToast();
   const { draft, update } = useWizard();
-  const { builder } = useFeatures();
+  const { builder, ready } = useFeatures();
   const amountText = draft.budgetAmount != null ? String(draft.budgetAmount) : "";
 
   const setAmount = (text: string) => {
@@ -49,6 +49,8 @@ export default function BudgetStep() {
   const canContinue = !!draft.budget || draft.budgetAmount != null;
   const Scroller = builder ? KeyboardAwareScrollView : ScrollView;
   const Footer = builder ? KeyboardStickyView : React.Fragment;
+
+  if (!ready) return <FeaturesLoading testID="create-budget-loading" />;
 
   return (
     <View style={s.root} testID="create-budget-screen">

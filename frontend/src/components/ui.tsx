@@ -224,3 +224,14 @@ export function StickyFooter({ children, extraBottom = 0 }: { children: React.Re
   const insets = useSafeAreaInsets();
   return <View style={[s.footer, { paddingBottom: Math.max(insets.bottom, spacing.lg) + extraBottom }]}>{children}</View>;
 }
+
+
+/** Full-screen placeholder shown while feature flags load, so a screen never renders the wrong experience UI first. */
+export function FeaturesLoading({ testID }: { testID: string }) {
+  const { colors } = useTheme();
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }} testID={testID}>
+      <ActivityIndicator color={colors.brandPrimary} />
+    </View>
+  );
+}

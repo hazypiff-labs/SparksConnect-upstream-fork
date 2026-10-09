@@ -40,6 +40,12 @@ Build "Date Spark", a connection-and-experience planning mobile app (NOT a datin
 ## Android package renamed (2026-06)
 - app.json android.package = com.date_spark.myapp (was com.emergent.vibefinder.rvztki). iOS bundleIdentifier unchanged. RevenueCat Play app re-synced.
 
+## Date Spark 2.0 — Increment 3 verification pass (2026‑06) ✅
+- Flag init fix: `useFeatures()` returns `ready`; Step 1–4 screens render `FeaturesLoading` until `/config/public` settles (no flash of Builder/Profiles UI when OFF). Who header shows 1/5 when builder ON.
+- Engine influence proven: `tests/test_builder_engine_influence.py` — LLM prompt captured (experience_details carries party_size/budget_amount/duration_hours/interests/transport/scheduled_at, `when` has weekday, SURPRISE_ME mode) + live generation (interest "Tacos" surfaces, walk legs, per‑person = total/party_size, duration ≤ window). Backend 91/91.
+- Frontend iteration 5: flag OFF → original 4‑step flow, flag ON → 5‑step builder flow, no‑flash poll, tabs/admin regression — all pass. Flags left ON.
+- Increment 4 NOT started (awaiting authorization).
+
 ## Date Spark 2.0 — Increment 3: Experience Builder (2026‑06) ✅
 - Flag `features.experience_builder` (default on, admin switch, independent of profiles). Step 1: party‑size stepper (non‑Couple; defaults couple 2/friends 4/family 4/celebration 6/travel 2/solo 1), "🎲 Surprise me" preference card (skips Vibe step, no transport), profile‑row edge fade. Vibe: collapsible profile‑aware interests chips. Budget: exact amount + $50/100/150/250 quick chips (tier kept in sync via `tierForAmount`). Distance CTA → Continue. New Step 5 `create/when.tsx`: date/time chips (→ `scheduled_at`), duration chips, transport chips. `results.tsx` sends only supplied fields. Engine: `when_text()` formats scheduled_at (weekday/time) for hours‑aware planning. `surprise_me` no longer derives a profile (profile from company/occasion).
 - Tests: backend 86/86 (`test_experience_builder.py` new), frontend iteration 4 9/9 + manual flag‑off verification.
