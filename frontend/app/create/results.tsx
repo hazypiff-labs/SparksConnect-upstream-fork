@@ -182,9 +182,17 @@ export default function Results() {
       ) : err?.status === 402 ? (
         <View style={s.center} testID="results-limit">
           <Text style={{ fontSize: 52 }}>✨</Text>
-          <Text style={s.emptyTitle}>You’ve used this month’s free Sparks</Text>
-          <Text style={s.emptySub}>Go Premium for unlimited personalized experiences — free for 2 weeks.</Text>
-          <Button title="Take Your Spark Further ✨" testID="results-premium-button" onPress={() => router.push({ pathname: "/premium", params: { reason: "limit" } })} style={{ alignSelf: "stretch" }} />
+          <Text style={s.emptyTitle}>{isPremium ? "This month’s Spark limit is reached" : "You’ve used this month’s free Sparks"}</Text>
+          <Text style={s.emptySub} testID="results-limit-message">
+            {isPremium
+              ? "Premium allowances unlock once server-side verification is live; until then every account shares the same monthly limit. Your subscription is unaffected and it resets automatically."
+              : "Go Premium for unlimited personalized experiences — free for 2 weeks."}
+          </Text>
+          {isPremium ? (
+            <Button title="Back to Create" variant="secondary" testID="results-limit-back" onPress={() => router.replace("/create")} style={{ alignSelf: "stretch" }} />
+          ) : (
+            <Button title="Take Your Spark Further ✨" testID="results-premium-button" onPress={() => router.push({ pathname: "/premium", params: { reason: "limit" } })} style={{ alignSelf: "stretch" }} />
+          )}
         </View>
       ) : (
         <>

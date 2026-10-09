@@ -177,7 +177,7 @@ export default function Admin() {
           <Text style={s.section}>Configuration</Text>
           <Text style={s.label}>Free Sparks per month</Text>
           <TextInput testID="admin-free-limit-input" style={s.input} keyboardType="number-pad" value={form.free_spark_limit} onChangeText={(v) => setForm({ ...form, free_spark_limit: v })} />
-          <Text style={s.label}>Generation limits (server-enforced; Premium claims are capped, never unlimited)</Text>
+          <Text style={s.label}>Generation limits (server-enforced; X-Premium claims are ignored — the Premium lane applies only to server-verified accounts)</Text>
           {LIMIT_FIELDS.map((f) => (
             <View key={f.key} style={s.listRow}>
               <Text style={s.listLabel}>{f.label}</Text>

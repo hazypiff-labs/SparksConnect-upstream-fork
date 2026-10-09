@@ -151,7 +151,7 @@ def test_events_endpoint(s):
 
 
 # ---------- Free limit enforcement (uses separate guest with limit temporarily lowered)
-def test_free_limit_enforcement_and_premium_bypass(s, admin_token):
+def test_free_limit_enforcement_and_premium_claim_is_not_a_bypass(s, admin_token):
     ah = {"Authorization": f"Bearer {admin_token}"}
     # Lower limit to 0 so first generation is blocked
     r = s.put(f"{API}/admin/config", headers=ah, json={"free_spark_limit": 0})
@@ -169,10 +169,9 @@ def test_free_limit_enforcement_and_premium_bypass(s, admin_token):
         r = s.post(f"{API}/sparks/generate", headers=h, json=payload, timeout=30)
         assert r.status_code == 402, f"expected 402 got {r.status_code}: {r.text[:200]}"
 
-        # Premium bypass
-        r = s.post(f"{API}/sparks/generate", headers={**h, "X-Premium": "1"}, json=payload, timeout=120)
-        assert r.status_code == 200, r.text
-        assert len(r.json()["sparks"]) == 3
+        # Phase A: a client-side X-Premium claim is NOT a bypass — same free quota applies (402, no LLM call)
+        r = s.post(f"{API}/sparks/generate", headers={**h, "X-Premium": "1"}, json=payload, timeout=30)
+        assert r.status_code == 402, r.text
     finally:
         # Restore
         r = s.put(f"{API}/admin/config", headers=ah, json={"free_spark_limit": 3})

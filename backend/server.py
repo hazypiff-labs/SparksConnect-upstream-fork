@@ -543,6 +543,16 @@ def month_start() -> datetime:
     return n.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
+async def verified_entitlement(ident: Identity) -> bool:
+    """Server-side truth for Premium limits. Guests can never be verified. Today only the admin role (JWT + DB) is a
+    trusted signal; RevenueCat server-side verification plugs in here once approved (see
+    memory/revenuecat_server_verification_plan.md). Client claims (X-Premium, subscription mirror) are never consulted."""
+    if ident.owner_type != "user":
+        return False
+    u = await db.users.find_one({"id": ident.owner_id, "deleted_at": None}, {"_id": 0, "role": 1})
+    return bool(u and u.get("role") == "admin")
+
+
 async def usage_for(ident: Identity, cfg: dict) -> dict:
     used = await db.analytics_events.count_documents(
         {"event": "sparks_generated", "owner_type": ident.owner_type, "owner_id": ident.owner_id, "created_at": {"$gte": month_start()}}
@@ -572,12 +582,13 @@ async def generate(
     x_premium: Annotated[str | None, Header()] = None,
 ):
     cfg = await get_config()
-    # X-Premium is a client hint, never proof: it only selects a bounded ceiling (see limits.py). All limits are
-    # reserved atomically here, BEFORE any Claude / Google Places call.
+    # X-Premium is a client claim and is IGNORED for limits (kept only for analytics). Only server-verified status
+    # unlocks the Premium lane. All limits are reserved atomically here, BEFORE any Claude / Google Places call.
+    premium_verified = await verified_entitlement(ident)
     try:
-        receipt = await limiter.reserve_generation(ip=client_ip(request), owner_type=ident.owner_type, owner_id=ident.owner_id, premium_claim=x_premium == "1", cfg=cfg)
+        receipt = await limiter.reserve_generation(ip=client_ip(request), owner_type=ident.owner_type, owner_id=ident.owner_id, premium_verified=premium_verified, cfg=cfg)
     except LimitExceeded as exc:
-        await track("generation_rate_limited", ident, {"scope": exc.scope, "premium_claim": x_premium == "1"})
+        await track("generation_rate_limited", ident, {"scope": exc.scope, "premium_claim": x_premium == "1", "premium_verified": premium_verified})
         raise HTTPException(exc.status, exc.message)
 
     prefs = await db.user_preferences.find_one({"owner_type": ident.owner_type, "owner_id": ident.owner_id}, NO_ID) or {}

@@ -1,0 +1,38 @@
+{
+  "summary": "Phase A security correction VERIFIED — all 5 scenarios PASS. (1) API: a client X-Premium: 1 header CANNOT lift a free user above the free quota — with free_spark_limit=0, (a) POST /api/sparks/generate as a brand-new signed-up user with 'Authorization: Bearer <user>' + 'X-Premium: 1' → HTTP 402 'You've used this month's free Sparks.' (identical body without the header → 402); (c) same endpoint as admin (server-verified premium) with limits.premium_daily_cap=0 → HTTP 429 'You've reached the Spark limit for today. It resets automatically.' — proving the header is ignored and only the admin role unlocks the Premium lane. (2) UI non-premium 402: signed-up a fresh user via /auth?mode=signup (auth-name-input/auth-email-input/auth-password-input/auth-submit-button) → ran the Couple create flow (who-option-partner → vibe-option-romantic → budget-option-50-100 → distance-option-10 + 'Austin, TX' via location-input/location-search-button → find-sparks-button → when-find-sparks-button) → app auto-navigated to /premium?reason=limit; browser-back landed on /create/results showing results-limit=TRUE and results-premium-button=TRUE. (2 cont.) UI admin success: logged in as admin via UI (admin = isPremium in the app), same create flow — spark-card-0 rendered in ~36s with no error. Needed a one-off premium_daily_cap bump because the shared admin identity's 15/day was exhausted from prior iterations today (same shared-infra note as iteration_10 — restored to 15 at the end). (3) UI Premium ceiling honest message: with premium_daily_cap=0 and free=3, admin create flow → results-rate-limited rendered with headline 'Taking a short breather' and helper text 'This is a temporary usage limit, not a problem with your Premium plan — your access is unchanged.' (contains 'not a problem with your Premium plan' ✓). (4) /admin shows the limits-section label: 'Generation limits (server-enforced; X-Premium claims are ignored — the Premium lane applies only to server-verified accounts)' — the exact 'X-Premium claims are ignored' phrase is present (admin.tsx:180). (5) Regression: GET /api/config/public → features {experience_profiles:true, experience_builder:true, experience_output:true, venue_hours:true, real_routing:false} ✓; /spark/b50acd38-5411-4b6f-ae1f-25fb40f7d711 with localStorage.guest_id='guest-hours-demo-02' renders spark-itinerary + itinerary-step-{0..2}-hours + hours-summary + cost-summary + cost-total ✓; tabs (tab-home, tab-sparks, tab-create, tab-profile) render on tab-layout screens (tab-create click succeeded in-flow). FINAL config restored and verified: free_spark_limit=3, limits={ip_hourly_cap:20, ip_daily_cap:80, guest_ids_per_ip_daily:20, premium_daily_cap:15, premium_monthly_cap:60}. Total LLM generations consumed this run: 1 (admin success case).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "shadow* style props", "issue": "Console warning: '\"shadow*\" style props are deprecated. Use \"boxShadow\".' — React Native Web 0.19+ deprecation. Non-blocking; migrate shadowColor/shadowOffset/shadowOpacity/shadowRadius to boxShadow where supported. Reference: multiple components across /app/frontend/src (not localized to one file)."}
+    ]
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_11.json",
+    "/app/backend/tests/test_iter11_premium_header.py"
+  ],
+  "action_items": [
+    "(Optional) Migrate shadow* style props → boxShadow to silence deprecation warning on web preview.",
+    "(Infra note, not a bug) Admin's premium_daily_cap=15 is shared across all iterations today on the same admin identity; S2c admin-success UI test required a temporary bump to 500 and was restored to 15 at the end. Consider a per-test-run admin or a 'test mode' flag that bypasses premium ceilings for admin, OR raise the default premium_daily_cap in test envs."
+  ],
+  "critical_code_review_comments": [
+    "limits.py:140-150 correctly uses premium_verified (server-decided today = admin role) to pick the lane. The client's X-Premium header is never read for limits — confirmed end-to-end (402 with header, 402 without header, 429 'resets automatically' only when server-verified).",
+    "results.tsx:88-90 onError only navigates to /premium when err.status===402 AND !isPremium — this is why the admin at the Premium ceiling (429) stays on results and sees results-rate-limited (correct, verified).",
+    "results.tsx:159 helper text branches on isPremium — the Premium-plan reassurance ('not a problem with your Premium plan — your access is unchanged') is shown to admin at ceiling; the guest-nudge is shown to free users. Both verified.",
+    "admin.tsx:180 limits-section label exposes the policy to admins ('X-Premium claims are ignored — the Premium lane applies only to server-verified accounts'). Good UX for operators."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter11_premium_header.py (new standalone API verification script; pytest skipped per request)"
+  ],
+  "success_rate": {
+    "backend": "3/3 API scenarios PASS (1a X-Premium ignored → 402; 1b no header → 402; 1c admin premium ceiling → 429 'resets automatically')",
+    "frontend": "5/5 UI scenarios PASS (S2 non-premium /premium redirect + back→results-limit; S2 admin spark-card-0; S3 Premium ceiling honest message; S4 /admin label; S5 regression: public flags + spark page itinerary/cost/hours + tabs)"
+  },
+  "seed_data_creation": "Created 2 TEST signup users via /api/auth/signup (iter11_<random>@example.com — direct API; iter11ui_<random>@example.com — via UI). Both are isolated test fixtures and consume only free-tier counters that reset monthly. 1 LLM generation consumed on admin identity (within premium_monthly_cap).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "The Phase A correction is live and verified: /api/sparks/generate never honors the client's X-Premium header — only server-verified status (admin role today) unlocks the Premium lane. Non-premium users with the header hit the ordinary free quota (402); admin at the Premium ceiling hits 429 with 'resets automatically'. UX is honest in both cases (/premium redirect for free users; results-rate-limited 'not a problem with your Premium plan' banner for premium users). Admin screen exposes the policy ('X-Premium claims are ignored'). Shared-infra note: admin's premium_daily_cap=15/day is shared across all iterations on the same admin identity — if you need to exercise the admin success path again, be ready to raise premium_daily_cap temporarily (and restore at the end). Final config restored to defaults verified via GET /api/admin/config.",
+  "rca_of_issue": "N/A — no bugs found. Phase A correction (header ignored, free quota applies, admin-only Premium lane) is correctly implemented in backend/limits.py and surfaced correctly in frontend/app/create/results.tsx and frontend/app/admin.tsx."
+}

@@ -129,3 +129,8 @@
 - B-3: `PUT /users/me/subscription` advisory only (`subscription_source: self_reported`); admin stats labelled "(self-reported)", new `subscription_metrics_source`, `rate_limited_requests`.
 - Frontend: results screen `results-rate-limited` state (title "Taking a short breather", message testID `results-rate-limited-message`, `results-rate-limited-back`), distinguishes temporary limit from Premium access.
 - Tests: `tests/test_phase_a_limits.py` (20). To trigger a 429 in UI tests: PUT /api/admin/config {"limits":{"guest_ids_per_ip_daily":0}} then generate as a NEW guest → 429 pre-LLM; RESTORE to 20 afterwards (defaults: ip_hourly_cap 20, ip_daily_cap 80, guest_ids_per_ip_daily 20, premium_daily_cap 15, premium_monthly_cap 60).
+
+## Phase A correction (2026-06): X-Premium ignored for limits
+- `X-Premium` no longer selects any lane. `verified_entitlement(ident)` (server.py) = admin role only for now (RevenueCat server verification pending). Forged header → ordinary free quota (402 after `free_spark_limit`). Admin (server-verified) → premium ceilings (429 at cap). Guests never verified.
+- results.tsx: 402 for `isPremium` users shows `results-limit` with testID `results-limit-message` explaining the temporary limitation + `results-limit-back`; non-premium unchanged (redirect to /premium, then `results-premium-button` on back).
+- Tests: test_phase_a_limits (forged header cannot exceed free quota; verified lane bounded; mocked happy path 3 free then 402), legacy test renamed `test_free_limit_enforcement_and_premium_claim_is_not_a_bypass`.

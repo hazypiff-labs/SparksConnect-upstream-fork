@@ -1,14 +1,15 @@
 """Server-side generation limits (Launch audit B-1/B-2).
 
-Nothing the client sends is proof of anything: `X-Premium` is a *hint* that selects a bounded ceiling, never
-unlimited use. Every counter is an atomic Mongo `$inc` taken BEFORE any Claude / Google Places call, so concurrent
+Nothing the client sends is proof of anything: `X-Premium` is IGNORED for limits. Only a server-verified
+entitlement (`premium_verified`, decided by the server from trusted data — today the admin role; later RevenueCat
+server-side verification) unlocks the Premium lane; everyone else gets exactly the ordinary free quota. Every counter is an atomic Mongo `$inc` taken BEFORE any Claude / Google Places call, so concurrent
 requests cannot slip past a cap, and the limiter is shared by all workers and survives restarts.
 
 Layers (all admin-tunable via app_config.limits):
   1. per-IP            hourly + daily            — blunt abuse / scripted traffic, generous for shared NAT
   2. guest-ids per IP  daily                     — rotating X-Guest-ID stops yielding fresh free allowances
   3. per-identity      free: monthly (existing)  — user id for accounts, guest id for guests
-                       premium claim: daily + monthly ceilings — forging the header buys a small, capped amount
+                       verified premium: daily + monthly ceilings (never reachable by a client claim)
 
 Fail-closed: if the counter store is unavailable the request is denied (429), never waved through.
 """
@@ -113,7 +114,7 @@ class Limiter:
         res = await self.db.rate_limits.update_one({"key": f"guest-seen:{guest_id}"}, {"$setOnInsert": {"expires_at": expires_at, "count": 0}}, upsert=True)
         return res.upserted_id is not None
 
-    async def reserve_generation(self, *, ip: str, owner_type: str, owner_id: str, premium_claim: bool, cfg: dict, now: datetime | None = None) -> dict:
+    async def reserve_generation(self, *, ip: str, owner_type: str, owner_id: str, premium_verified: bool, cfg: dict, now: datetime | None = None) -> dict:
         """Take every applicable unit for one generation or raise LimitExceeded. Returns a receipt for `release()`.
         Order: IP → guest rotation → identity, so expensive identity windows aren't consumed by blocked traffic."""
         lim = limits_from(cfg)
@@ -136,7 +137,7 @@ class Limiter:
                         raise LimitExceeded(429, "Too many new guest sessions from your network today. Sign in to keep creating Sparks.", "guest_rotation")
             # 3. identity ceilings
             ident = f"{owner_type}:{owner_id}"
-            if premium_claim:
+            if premium_verified:
                 for window, cap, msg in (("day", lim["premium_daily_cap"], "today"), ("month", lim["premium_monthly_cap"], "this month")):
                     key = f"id:{ident}:premium:{window}:{w[window][0]}"
                     taken.append(key)
