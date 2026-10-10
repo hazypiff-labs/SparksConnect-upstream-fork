@@ -29,6 +29,7 @@ const FLAGS = [
   { key: "experience_output", id: "experience-output", label: "Experience Output (itinerary travel legs · cost summary · results summary chips)" },
   { key: "venue_hours", id: "venue-hours", label: "Venue Hours (verify opening hours for the planned time · hide closed venues)" },
   { key: "real_routing", id: "real-routing", label: "Real Routing (Google Routes API travel times · requires Routes API enabled on the project · billable beyond the free tier — keep OFF until approved)" },
+  { key: "server_entitlements", id: "server-entitlements", label: "Server Entitlements (Premium lane from RevenueCat webhooks + read-only lookups · requires webhook secret + API key configured and back-fill reviewed — keep OFF until rollout is approved)" },
 ];
 
 const useStyles = makeStyles((c) => ({
@@ -196,7 +197,7 @@ export default function Admin() {
           <TextInput testID="admin-featured-input" style={[s.input, { minHeight: 90 }]} multiline value={form.featured} onChangeText={(v) => setForm({ ...form, featured: v })} />
           <Text style={s.label}>Feature flags</Text>
           {FLAGS.map((f) => {
-            const on = features[f.key] !== false;
+            const on = !!config.data && features[f.key] !== false; // never show a flag as ON before the config has loaded
             return (
               <View key={f.key} style={s.listRow}>
                 <Pressable

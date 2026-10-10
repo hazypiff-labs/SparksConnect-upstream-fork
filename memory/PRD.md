@@ -90,3 +90,8 @@ Build "Date Spark", a connection-and-experience planning mobile app (NOT a datin
 - Next: Increment 2 (Experience Profiles UI) after user review.
 
 ## Android versionCode set to 104 (2026-06) — package com.date_spark.myapp unchanged.
+
+## RevenueCat server-side entitlement verification (2026‑06) ✅ built, flag `server_entitlements` OFF (not activated)
+- New `backend/entitlements.py`: signed-webhook pipeline (`POST /api/revenuecat/webhook`, raw-body HMAC, ±5 min replay window, duplicate ids acked once, out-of-order safe, environment check, unknown/deleted users get nothing), read-only REST lookup (`active_entitlements`, 5 s timeout, 24 h TTL, 401/403 fail closed, 404 = not premium, 72 h grace ONLY for last-verified-active users during transient outages), admin `entitlement-check` / `reverify` / `backfill` (dry run default, aborts on auth errors), stats counters. `verified_entitlement()` consults it only when the flag is ON; OFF == Phase A exactly. Admin flag row added.
+- Env (deployment panel only): `REVENUECAT_SECRET_KEY`, `REVENUECAT_PROJECT_ID`, `REVENUECAT_WEBHOOK_SECRET`, optional `REVENUECAT_WEBHOOK_AUTH`, `REVENUECAT_ENTITLEMENT_ID`, `REVENUECAT_ENVIRONMENT`. Dev `.env` holds only a dummy webhook secret + `SANDBOX`.
+- Tests: `tests/test_server_entitlements.py` 29/29 (all RevenueCat HTTP mocked; no sandbox/live calls). Runbook: `/app/memory/revenuecat_rollout_runbook.md` (manual steps, production rollout, rollback).

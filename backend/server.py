@@ -18,6 +18,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 from places import geocode  # noqa: E402
+from entitlements import EntitlementStore, Settings as RCSettings, SignatureError  # noqa: E402
 from limits import DEFAULT_LIMITS, LimitExceeded, Limiter, client_ip  # noqa: E402
 from recommend import generate_sparks  # noqa: E402
 from routing import RouteCache  # noqa: E402
@@ -29,6 +30,8 @@ client = AsyncIOMotorClient(os.environ["MONGO_URL"])
 db = client[os.environ["DB_NAME"]]
 route_cache = RouteCache(db)
 limiter = Limiter(db)
+rc_settings = RCSettings.from_env()
+entitlements = EntitlementStore(db, rc_settings)
 
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = "HS256"
@@ -49,7 +52,9 @@ DEFAULT_CONFIG = {
     "ai_settings": {"model": "claude-sonnet-4-6", "guidance": "Prioritize conversation-friendly, memorable moments."},
     # Feature flags — toggled from the admin dashboard, no redeploy needed
     # real_routing stays OFF until the Google Routes API is enabled on the project and activation is approved.
-    "features": {"experience_profiles": True, "experience_builder": True, "experience_output": True, "venue_hours": True, "real_routing": False},
+    # server_entitlements stays OFF until the RevenueCat webhook + read-only key are registered and the back-fill reviewed
+    # (memory/revenuecat_rollout_runbook.md). OFF == Phase A behaviour exactly.
+    "features": {"experience_profiles": True, "experience_builder": True, "experience_output": True, "venue_hours": True, "real_routing": False, "server_entitlements": False},
     # Server-side generation limits (Launch audit B-1/B-2). X-Premium only selects the bounded premium ceiling.
     "limits": dict(DEFAULT_LIMITS),
 }
@@ -289,6 +294,8 @@ async def startup():
     await db.sparks.create_index("id", unique=True)
     await route_cache.ensure_indexes()
     await limiter.ensure_indexes()
+    await entitlements.ensure_indexes()
+    logger.info("RevenueCat server verification: %s", rc_settings.status())
     await db.saved_sparks.create_index([("owner_type", 1), ("owner_id", 1), ("spark_id", 1)])
     await db.analytics_events.create_index([("event", 1), ("created_at", -1)])
     admin_email = os.environ.get("ADMIN_EMAIL", "").lower()
@@ -543,14 +550,29 @@ def month_start() -> datetime:
     return n.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
-async def verified_entitlement(ident: Identity) -> bool:
-    """Server-side truth for Premium limits. Guests can never be verified. Today only the admin role (JWT + DB) is a
-    trusted signal; RevenueCat server-side verification plugs in here once approved (see
-    memory/revenuecat_server_verification_plan.md). Client claims (X-Premium, subscription mirror) are never consulted."""
+async def verified_entitlement(ident: Identity, cfg: dict | None = None) -> bool:
+    """Server-side truth for Premium limits. Guests can never be verified. The admin role (JWT + DB) is always
+    trusted. With `features.server_entitlements` ON, paying users are verified from RevenueCat data the server
+    trusts (signed webhooks + read-only REST lookups, see entitlements.py); OFF == Phase A. Client claims (X-Premium,
+    subscription mirror) are never consulted."""
     if ident.owner_type != "user":
         return False
     u = await db.users.find_one({"id": ident.owner_id, "deleted_at": None}, {"_id": 0, "role": 1})
-    return bool(u and u.get("role") == "admin")
+    if not u:
+        return False
+    if u.get("role") == "admin":
+        return True
+    cfg = cfg or await get_config()
+    if not cfg.get("features", {}).get("server_entitlements", False):
+        return False
+    try:
+        premium, reason = await entitlements.resolve(ident.owner_id)
+    except Exception as exc:  # store failure → fail closed
+        logger.error("entitlement resolution failed: %s", type(exc).__name__)
+        return False
+    if premium:
+        await track("entitlement_verified", ident, {"reason": reason})
+    return premium
 
 
 async def usage_for(ident: Identity, cfg: dict) -> dict:
@@ -584,7 +606,7 @@ async def generate(
     cfg = await get_config()
     # X-Premium is a client claim and is IGNORED for limits (kept only for analytics). Only server-verified status
     # unlocks the Premium lane. All limits are reserved atomically here, BEFORE any Claude / Google Places call.
-    premium_verified = await verified_entitlement(ident)
+    premium_verified = await verified_entitlement(ident, cfg)
     try:
         receipt = await limiter.reserve_generation(ip=client_ip(request), owner_type=ident.owner_type, owner_id=ident.owner_id, premium_verified=premium_verified, cfg=cfg)
     except LimitExceeded as exc:
@@ -897,6 +919,12 @@ async def admin_stats(_: Annotated[dict, Depends(require_admin)]):
         "mrr": round(premium * cfg["premium_price"], 2),
         "conversion_rate": round((premium / total_users) * 100, 1) if total_users else 0.0,
         "subscription_metrics_source": "self_reported",
+        # Server-verified (RevenueCat webhooks / read-only lookups) — authoritative once server_entitlements is ON.
+        "verified_premium_users": await db.entitlements.count_documents({"active": True, "$or": [{"expires_at": None}, {"expires_at": {"$gt": now()}}]}),
+        "last_webhook_at": iso(((await db.webhook_events.find_one({}, {"_id": 0, "received_at": 1}, sort=[("received_at", -1)])) or {}).get("received_at")),
+        "webhooks_rejected_30d": await db.analytics_events.count_documents({"event": "revenuecat_webhook_rejected", "created_at": {"$gte": since}}),
+        "grace_grants_30d": await db.analytics_events.count_documents({"event": "entitlement_verified", "props.reason": {"$regex": "^grace"}, "created_at": {"$gte": since}}),
+        "server_entitlements": {"flag": cfg["features"].get("server_entitlements", False), **rc_settings.status()},
         "rate_limited_requests": await db.analytics_events.count_documents({"event": "generation_rate_limited", "created_at": {"$gte": since}}),
         "generate_to_share_rate": round((sharers / generators) * 100, 1) if generators else 0.0,
         "popular_relationships": await top_values("relationship_type"),
@@ -934,6 +962,59 @@ async def admin_ip_check(request: Request, _: Annotated[dict, Depends(require_ad
     """Deployment check for the rate limiter: shows how the client address is resolved behind the proxy chain.
     `resolved` must be the caller's public IP (not a load-balancer address) — otherwise set TRUSTED_PROXY_HOPS."""
     return {"resolved": client_ip(request), "x_forwarded_for": request.headers.get("x-forwarded-for"), "cf_connecting_ip": request.headers.get("cf-connecting-ip"), "trusted_proxy_hops": os.environ.get("TRUSTED_PROXY_HOPS", "2")}
+
+
+# ---------------------------------------------------------------- RevenueCat server-side verification
+@api.post("/revenuecat/webhook")
+async def revenuecat_webhook(
+    request: Request,
+    x_revenuecat_webhook_signature: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
+):
+    """Signed RevenueCat webhook (HMAC over the raw body, 5-minute replay window). Events are persisted once
+    (duplicate ids acknowledged, not re-applied) and state is recomputed from the newest data / REST truth, so
+    delivery order does not matter. Works independently of the feature flag so state is already correct when the
+    flag is turned on; the flag only controls whether `verified_entitlement()` consults that state."""
+    raw = await request.body()
+    try:
+        result = await entitlements.handle_webhook(raw, x_revenuecat_webhook_signature, authorization)
+    except SignatureError as exc:
+        await track("revenuecat_webhook_rejected", None, {"reason": str(exc)})
+        raise HTTPException(401, "Invalid webhook signature")
+    await track("revenuecat_webhook_received", None, {k: v for k, v in result.items() if k != "applied"})
+    return result
+
+
+@api.get("/admin/entitlement-check")
+async def admin_entitlement_check(user_id: str, _: Annotated[dict, Depends(require_admin)]):
+    """Resolved server-side entitlement side-by-side with the self-reported mirror. Read-only; no secrets."""
+    return await entitlements.check(user_id)
+
+
+@api.post("/admin/entitlement-check/{user_id}/reverify")
+async def admin_entitlement_reverify(user_id: str, _: Annotated[dict, Depends(require_admin)]):
+    """Forced REST lookup for one user (recovery path). 401/403 from RevenueCat surface as 502 and grant nothing."""
+    if not await db.users.find_one({"id": user_id, "deleted_at": None}, {"_id": 0, "id": 1}):
+        raise HTTPException(404, "User not found")
+    try:
+        await entitlements.lookup_and_store(user_id)
+    except Exception as exc:
+        raise HTTPException(502, f"Lookup failed: {getattr(exc, 'kind', type(exc).__name__)}")
+    return await entitlements.check(user_id)
+
+
+class BackfillIn(BaseModel):
+    dry_run: bool = True
+    limit: int = Field(default=1000, ge=1, le=10000)
+    user_ids: Optional[list[str]] = None
+
+
+@api.post("/admin/entitlements/backfill")
+async def admin_entitlement_backfill(_: Annotated[dict, Depends(require_admin)], data: BackfillIn | None = None):
+    """Reconcile non-deleted users (all, or `user_ids`) against RevenueCat by exact users.id. Dry run by default
+    (report only); `dry_run=false` persists verified state. Aborts (nothing persisted) on auth/permission errors."""
+    data = data or BackfillIn()
+    return await entitlements.backfill(dry_run=data.dry_run, limit=data.limit, user_ids=data.user_ids)
 
 
 app.include_router(api)

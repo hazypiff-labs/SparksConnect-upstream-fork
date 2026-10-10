@@ -1,0 +1,24 @@
+{
+  "summary": "Independent API-level verification of server-side RevenueCat entitlement verification (increment: Phase B behind feature flag). 15/15 tests pass against http://localhost:8001/api. All items from the review request were exercised: public config flag default OFF; webhook signature paths (unsigned/wrong-secret/stale → 401, valid → 200 applied_from_event, duplicate → {ok:true, duplicate:true}, PRODUCTION env in SANDBOX dev → ignored, unknown uid → unknown_user); admin endpoints (entitlement-check verified_active_now=true + self_reported_status='free' + redacted config, reverify unconfigured → 502, unknown → 404, backfill dry_run → aborted:unconfigured + checked:0, unauth → 401, stats with required keys and flag=false); end-to-end zero-LLM lane (free_spark_limit=0 + premium_daily_cap=0: flag OFF → 402 even with webhook+forged mirror+X-Premium; flag ON → verified user hits 429 'resets automatically', unverified forged user → 402; EXPIRATION → 402; RENEWAL with flag OFF → 402). Regression spot checks for guest /sparks/usage and admin real_routing=false pass. REVENUECAT_WEBHOOK_SECRET was read from backend/.env only to sign requests and never printed/logged. No live RevenueCat calls (REVENUECAT_SECRET_KEY unset in dev → 'unconfigured'). No LLM generations triggered (both lanes capped at 0). Final state verified: features.server_entitlements=false, free_spark_limit=3, limits.premium_daily_cap=15.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": [], "react_native_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_server_entitlements_verification.py",
+    "/app/test_reports/pytest/verification_iteration12.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "entitlements.py keeps the webhook pipeline inert when features.server_entitlements is OFF only at the resolver boundary — the webhook endpoint still records state (correct, matches runbook). Signature window is 300s; stale-15-min test confirms rejection.",
+    "Admin entitlement-check config exposes only booleans + 'environment' (short string); no secret-material leaks observed in response.",
+    "Backfill correctly short-circuits with aborted='unconfigured' when REVENUECAT_SECRET_KEY/project_id are unset — no accidental state is written."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_server_entitlements_verification.py (new)"
+  ],
+  "success_rate": {"backend": "100% (15/15)", "frontend": "N/A (not tested per request)"},
+  "seed_data_creation": "Created ephemeral signup users (ent-ver-*@example.com) and webhook_events during tests. Entitlement docs for test users remain in the entitlements collection (test file does not clean them up because the review-request flow does not require cleanup); these are inert while server_entitlements flag is OFF.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Reusable pytest suite at /app/backend/tests/test_server_entitlements_verification.py covers all 5 review-request items with 15 tests (parallel-safe via xdist). It reads REVENUECAT_WEBHOOK_SECRET from backend/.env at runtime for signing only and never prints it. The end-to-end test saves and restores admin config in a finally block, so re-running is safe. Final verified state after the run: features.server_entitlements=false, free_spark_limit=3, limits.premium_daily_cap=15.",
+  "rca_of_issue": "N/A — no bugs found."
+}
