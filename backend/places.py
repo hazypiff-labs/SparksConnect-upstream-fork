@@ -7,11 +7,30 @@ geocoding fallback. Additional providers can be plugged in here later.
 import logging
 import math
 import os
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 import httpx
 
 logger = logging.getLogger("places")
+
+# Server-wide spend guard (audit N10): an async callable returning False once today's Google Places budget is used up.
+# Installed by server.py; when it says no, searches return no venues and geocoding falls back to Nominatim.
+_budget_ok: Optional[Callable[[], Awaitable[bool]]] = None
+
+
+def set_budget_guard(fn: Optional[Callable[[], Awaitable[bool]]]) -> None:
+    global _budget_ok
+    _budget_ok = fn
+
+
+async def _within_budget() -> bool:
+    if _budget_ok is None:
+        return True
+    try:
+        return await _budget_ok()
+    except Exception as exc:  # guard unavailable → no paid call (geocoding still falls back to Nominatim)
+        logger.warning("Places budget guard failed: %s", type(exc).__name__)
+        return False
 
 PLACES_FIELDS = (
     "places.id,places.displayName,places.formattedAddress,places.location,"
@@ -70,7 +89,7 @@ def _normalize(place: dict[str, Any], lat: float, lng: float) -> dict[str, Any]:
 
 async def search_venues(query: str, lat: float, lng: float, radius_m: float, max_results: int = 6) -> list[dict]:
     key = os.environ.get("GOOGLE_PLACES_API_KEY", "")
-    if not key:
+    if not key or not await _within_budget():
         return []
     body = {
         "textQuery": query,
@@ -96,7 +115,7 @@ async def search_venues(query: str, lat: float, lng: float, radius_m: float, max
 async def geocode(query: str) -> Optional[dict[str, Any]]:
     """Resolve a city / ZIP to coordinates. Google Places text search first, Nominatim fallback."""
     key = os.environ.get("GOOGLE_PLACES_API_KEY", "")
-    if key:
+    if key and await _within_budget():
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(

@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from recommend import compute_travel_legs, cost_rollup, parse_cost, resolve_mode  # noqa: E402
 
-BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://vibe-finder-75.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ["SPARKS_TEST_BASE_URL"].rstrip("/")
 API = f"{BASE_URL}/api"
 AUSTIN = {"label": "Austin, TX", "lat": 30.2672, "lng": -97.7431}
 

@@ -9,9 +9,9 @@ import json
 import time
 import requests
 
-BASE = "https://vibe-finder-75.preview.emergentagent.com/api"
-ADMIN_EMAIL = "admin@datespark.app"
-ADMIN_PASS = "SparkAdmin2026!"
+BASE = os.environ["SPARKS_TEST_BASE_URL"] + "/api"
+ADMIN_EMAIL = os.environ["SPARKS_TEST_ADMIN_EMAIL"]
+ADMIN_PASS = os.environ["SPARKS_TEST_ADMIN_PASSWORD"]
 
 LOCATION = {"label": "Austin, TX", "lat": 30.2672, "lng": -97.7431}
 GEN_BODY = {

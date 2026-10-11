@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import recommend  # noqa: E402
 from server import GenerateIn  # noqa: E402
 
-BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://vibe-finder-75.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ["SPARKS_TEST_BASE_URL"].rstrip("/")
 API = f"{BASE_URL}/api"
 AUSTIN = {"label": "Austin, TX", "lat": 30.2672, "lng": -97.7431}
 AI = {"model": "claude-sonnet-4-6", "guidance": ""}
@@ -58,16 +58,9 @@ class _Capture:
     prompt = None
 
 
-class _FakeChat:
-    def __init__(self, api_key, session_id, system_message):
-        _Capture.system = system_message
-
-    def with_model(self, *_):
-        return self
-
-    async def send_message(self, msg):
-        _Capture.prompt = msg.text
-        return FAKE_REPLY
+async def _fake_llm(system, prompt, model):
+    _Capture.system, _Capture.prompt = system, prompt
+    return FAKE_REPLY
 
 
 async def _fake_gather(lat, lng, radius, vibes):
@@ -76,9 +69,8 @@ async def _fake_gather(lat, lng, radius, vibes):
 
 @pytest.fixture
 def engine(monkeypatch):
-    monkeypatch.setattr(recommend, "LlmChat", _FakeChat)
+    monkeypatch.setattr(recommend, "llm_complete", _fake_llm)
     monkeypatch.setattr(recommend, "gather_venues", _fake_gather)
-    monkeypatch.setenv("EMERGENT_LLM_KEY", "test")
     _Capture.system = _Capture.prompt = None
 
     def run(body: dict):

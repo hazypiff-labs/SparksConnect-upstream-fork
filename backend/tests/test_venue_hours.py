@@ -22,10 +22,10 @@ from hours import evaluate_hours, hours_on_day, summarize, visit_window  # noqa:
 from places import _normalize  # noqa: E402
 from server import DEFAULT_CONFIG, OUTPUT_FIELDS, GenerateIn, redact_for_recipient  # noqa: E402
 
-BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://vibe-finder-75.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ["SPARKS_TEST_BASE_URL"].rstrip("/")
 API = f"{BASE_URL}/api"
 AUSTIN = {"label": "Austin, TX", "lat": 30.2672, "lng": -97.7431}
-ADMIN = {"email": "admin@datespark.app", "password": "SparkAdmin2026!"}
+ADMIN = {"email": os.environ["SPARKS_TEST_ADMIN_EMAIL"], "password": os.environ["SPARKS_TEST_ADMIN_PASSWORD"]}
 CT = -300  # Austin in June (CDT) = UTC-5
 
 # Saturday 2026-06-27 19:00 CDT == 2026-06-28T00:00Z. "now" is the Wednesday before → inside Google's 7-day window.
@@ -169,22 +169,14 @@ class _Cap:
     system = prompt = None
 
 
-class _FakeChat:
-    def __init__(self, api_key, session_id, system_message):
-        _Cap.system = system_message
-
-    def with_model(self, *_):
-        return self
-
-    async def send_message(self, msg):
-        _Cap.prompt = msg.text
-        return REPLY
+async def _fake_llm(system, prompt, model):
+    _Cap.system, _Cap.prompt = system, prompt
+    return REPLY
 
 
 @pytest.fixture
 def engine(monkeypatch):
-    monkeypatch.setattr(recommend, "LlmChat", _FakeChat)
-    monkeypatch.setenv("EMERGENT_LLM_KEY", "test")
+    monkeypatch.setattr(recommend, "llm_complete", _fake_llm)
 
     def run(body: dict, venues=VENUES, venue_hours=True):
         async def fake_gather(*_):

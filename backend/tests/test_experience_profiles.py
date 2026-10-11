@@ -10,10 +10,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from server import GenerateIn  # noqa: E402
 
-BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://vibe-finder-75.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ["SPARKS_TEST_BASE_URL"].rstrip("/")
 API = f"{BASE_URL}/api"
 AUSTIN = {"label": "Austin, TX", "lat": 30.2672, "lng": -97.7431}
-ADMIN = {"email": "admin@datespark.app", "password": "SparkAdmin2026!"}
+ADMIN = {"email": os.environ["SPARKS_TEST_ADMIN_EMAIL"], "password": os.environ["SPARKS_TEST_ADMIN_PASSWORD"]}
 
 BASE = {"relationship_type": "partner", "vibes": ["romantic"], "budget": "25-50", "distance": "10", "location": AUSTIN}
 

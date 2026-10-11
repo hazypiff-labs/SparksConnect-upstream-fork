@@ -6,11 +6,11 @@ import uuid
 import pytest
 import requests
 
-BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://vibe-finder-75.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ["SPARKS_TEST_BASE_URL"].rstrip("/")
 API = f"{BASE_URL}/api"
 
-ADMIN_EMAIL = "admin@datespark.app"
-ADMIN_PASSWORD = "SparkAdmin2026!"
+ADMIN_EMAIL = os.environ["SPARKS_TEST_ADMIN_EMAIL"]
+ADMIN_PASSWORD = os.environ["SPARKS_TEST_ADMIN_PASSWORD"]
 
 GUEST_ID = f"guest-{uuid.uuid4().hex[:16]}"
 GUEST_ID_2 = f"guest-{uuid.uuid4().hex[:16]}"
@@ -65,7 +65,7 @@ def test_public_config(s):
 
 # ---------- Geocoding
 def test_geocode_austin(s):
-    r = s.get(f"{API}/places/geocode", params={"q": "Austin"})
+    r = s.get(f"{API}/places/geocode", params={"q": "Austin"}, headers={"X-Guest-ID": GUEST_ID})
     assert r.status_code == 200, r.text
     d = r.json()
     assert "label" in d and "lat" in d and "lng" in d
@@ -146,8 +146,11 @@ def test_complete_spark(generated_spark_ids, s):
 
 
 def test_events_endpoint(s):
-    r = s.post(f"{API}/events", headers={"X-Guest-ID": GUEST_ID}, json={"event": "test_event", "props": {"k": "v"}})
+    r = s.post(f"{API}/events", headers={"X-Guest-ID": GUEST_ID}, json={"event": "app_opened", "props": {"k": "v"}})
     assert r.status_code == 200 and r.json()["ok"] is True
+    # server-only / unknown event names are rejected (audit H5)
+    r = s.post(f"{API}/events", headers={"X-Guest-ID": GUEST_ID}, json={"event": "sparks_generated", "props": {}})
+    assert r.status_code == 422
 
 
 # ---------- Free limit enforcement (uses separate guest with limit temporarily lowered)

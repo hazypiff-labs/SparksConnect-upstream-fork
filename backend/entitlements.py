@@ -99,6 +99,10 @@ class SignatureError(Exception):
     pass
 
 
+class WebhookRetry(Exception):
+    """Processing failed after the event was stored; the endpoint answers 5xx so RevenueCat redelivers (audit N7)."""
+
+
 def verify_signature(raw_body: bytes, header: str | None, secret: str, now_ts: float | None = None) -> None:
     """`X-RevenueCat-Webhook-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "{t}.{raw body}">`.
     Raises SignatureError on any defect; the raw bytes must be used verbatim."""
@@ -309,7 +313,14 @@ class EntitlementStore:
         try:
             await self.db.webhook_events.insert_one(dict(doc))
         except DuplicateKeyError:
-            return None
+            # A redelivery of an event whose processing failed is processed again; anything else is a duplicate.
+            retried = await self.db.webhook_events.find_one_and_update(
+                {"event_id": doc["event_id"], "status": "error"},
+                {"$set": {"status": "received", "retried_at": now}, "$inc": {"attempts": 1}},
+                projection={"_id": 0},
+                return_document=ReturnDocument.AFTER,
+            )
+            return retried
         return doc
 
     @staticmethod
@@ -317,6 +328,8 @@ class EntitlementStore:
         """Event-derived state (used when a REST re-sync is impossible). None = event does not affect `pro`."""
         etype = event.get("type")
         ids = event.get("entitlement_ids") or []
+        if etype in GRANTING_EVENTS and ENTITLEMENT_KEY not in ids:
+            return None  # only an event that names `pro` can grant it (audit N8)
         if ids and ENTITLEMENT_KEY not in ids and etype != "TRANSFER":
             return None
         exp = _ms(event.get("expiration_at_ms"))
@@ -343,10 +356,15 @@ class EntitlementStore:
             losers = [str(x) for x in (event.get("transferred_from") or [])]
             gainers = [str(x) for x in (event.get("transferred_to") or [])]
         else:
+            # Exactly one Date Spark user per event: the current app_user_id, or — only when that id is not one of
+            # ours (e.g. an anonymous RevenueCat id) — the original id. Never both (audit N5).
             losers, gainers = [], []
             for key in ("app_user_id", "original_app_user_id"):
-                if event.get(key) and str(event[key]) not in gainers:
-                    gainers.append(str(event[key]))
+                if event.get(key) and await self._user_exists(str(event[key])):
+                    gainers = [str(event[key])]
+                    break
+            if not gainers and event.get("app_user_id"):
+                gainers = [str(event["app_user_id"])]
         results: dict[str, str] = {}
         for uid in losers + gainers:
             if not await self._user_exists(uid):
@@ -354,7 +372,8 @@ class EntitlementStore:
                 continue
             existing = await self.db.entitlements.find_one({"user_id": uid}, {"_id": 0})
             last = _aware(existing.get("last_event_at")) if existing else None
-            if last and event_at < last and etype not in ACCESS_CHANGING_EVENTS:
+            stale = bool(last and event_at < last)
+            if stale and etype not in ACCESS_CHANGING_EVENTS:
                 results[uid] = "stale_event_ignored"
                 continue
             if etype == "TEST":
@@ -370,6 +389,9 @@ class EntitlementStore:
                     continue
                 except LookupFailure as exc:
                     note = f"lookup_failed:{exc.kind}:"
+                    if stale:  # without REST truth an older event must never overwrite newer state (audit N6)
+                        results[uid] = note + "stale_event_ignored"
+                        continue
                     if uid in losers:  # losing side of a TRANSFER: revoke now, REST truth arrives on the next check
                         await self._persist(uid, active=False, expires_at=None, source="webhook", now=now, transferred=True, **meta)
                         results[uid] = note + "revoked"
@@ -402,15 +424,15 @@ class EntitlementStore:
         if stored["status"] != "received":
             return {"ok": True, "ignored": stored["status"]}
         env = str(event.get("environment") or "").upper()
-        if env and env != self.settings.environment:
+        if env != self.settings.environment:  # a missing environment is not trusted either (audit N8)
             await self.db.webhook_events.update_one({"event_id": stored["event_id"]}, {"$set": {"status": "ignored_environment"}})
             return {"ok": True, "ignored": "environment"}
         try:
             applied = await self.apply_event(stored, event, now)
-        except Exception as exc:  # persisted already; RevenueCat retries are harmless (duplicate id)
+        except Exception as exc:  # stored as `error`: the 5xx makes RevenueCat redeliver, and record_event re-admits it
             logger.exception("webhook apply failed")
             await self.db.webhook_events.update_one({"event_id": stored["event_id"]}, {"$set": {"status": "error", "error": type(exc).__name__}})
-            return {"ok": True, "error": type(exc).__name__}
+            raise WebhookRetry(type(exc).__name__) from exc
         return {"ok": True, "applied": applied}
 
     # ------------------------------------------------------------ admin

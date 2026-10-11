@@ -5,7 +5,7 @@ import uuid
 import pytest
 import requests
 
-BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://vibe-finder-75.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ["SPARKS_TEST_BASE_URL"].rstrip("/")
 API = f"{BASE_URL}/api"
 
 OWNER_GUEST = f"guest-{uuid.uuid4().hex[:16]}"
@@ -20,8 +20,10 @@ def s():
 
 
 # ---------- Google session with bogus id must reject
-def test_auth_session_bogus_returns_401(s):
-    r = s.post(f"{API}/auth/session", json={"session_id": "bogus-does-not-exist"})
+def test_emergent_session_exchange_removed_and_google_bogus_token_401(s):
+    # The Emergent demo-auth exchange is gone (audit H3); Google sign-in verifies ID tokens server-side.
+    assert s.post(f"{API}/auth/session", json={"session_id": "bogus"}).status_code in (404, 405)
+    r = s.post(f"{API}/auth/google", json={"id_token": "bogus.token.value"})
     assert r.status_code == 401, r.text
 
 

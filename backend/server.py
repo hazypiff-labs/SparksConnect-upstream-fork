@@ -1,6 +1,10 @@
+import asyncio
+import html
+import json
 import logging
 import os
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any, Optional
@@ -8,22 +12,37 @@ from typing import Annotated, Any, Optional
 import httpx
 import jwt
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import DuplicateKeyError
 from pwdlib import PasswordHash
-from pydantic import BaseModel, EmailStr, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
+import places  # noqa: E402
 from places import geocode  # noqa: E402
-from entitlements import EntitlementStore, Settings as RCSettings, SignatureError  # noqa: E402
+from entitlements import EntitlementStore, Settings as RCSettings, SignatureError, WebhookRetry  # noqa: E402
+from identity import CodeStore, Mailer, ProviderError, ProviderIdentity, apple_exchange_code, apple_revoke, verify_apple_token, verify_google_token  # noqa: E402
 from limits import DEFAULT_LIMITS, LimitExceeded, Limiter, client_ip  # noqa: E402
 from recommend import generate_sparks  # noqa: E402
 from routing import RouteCache  # noqa: E402
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+class _JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        out = {"ts": self.formatTime(record), "level": record.levelname, "logger": record.name, "msg": record.getMessage()}
+        if record.exc_info:
+            out["exc"] = self.formatException(record.exc_info)
+        return json.dumps(out)
+
+
+# LOG_FORMAT=json for log aggregation in production; the readable format stays the default for development.
+_handler = logging.StreamHandler()
+_handler.setFormatter(_JsonFormatter() if os.environ.get("LOG_FORMAT") == "json" else logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+logging.basicConfig(level=logging.INFO, handlers=[_handler])
 logger = logging.getLogger("datespark")
 
 client = AsyncIOMotorClient(os.environ["MONGO_URL"])
@@ -32,6 +51,8 @@ route_cache = RouteCache(db)
 limiter = Limiter(db)
 rc_settings = RCSettings.from_env()
 entitlements = EntitlementStore(db, rc_settings)
+codes = CodeStore(db)
+mailer = Mailer(db)
 
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = "HS256"
@@ -39,6 +60,7 @@ TOKEN_DAYS = 30
 password_hash = PasswordHash.recommended()
 DUMMY_HASH = password_hash.hash("dummy-password-not-used")
 NO_ID = {"_id": 0}
+ANALYTICS_RETENTION_DAYS = 400  # raw events are deleted after ~13 months (audit N13)
 
 DEFAULT_CONFIG = {
     "free_spark_limit": 3,
@@ -54,12 +76,19 @@ DEFAULT_CONFIG = {
     # real_routing stays OFF until the Google Routes API is enabled on the project and activation is approved.
     # server_entitlements stays OFF until the RevenueCat webhook + read-only key are registered and the back-fill reviewed
     # (memory/revenuecat_rollout_runbook.md). OFF == Phase A behaviour exactly.
-    "features": {"experience_profiles": True, "experience_builder": True, "experience_output": True, "venue_hours": True, "real_routing": False, "server_entitlements": False},
+    "features": {"generation_enabled": True, "experience_profiles": True, "experience_builder": True, "experience_output": True, "venue_hours": True, "real_routing": False, "server_entitlements": False},
     # Server-side generation limits (Launch audit B-1/B-2). X-Premium only selects the bounded premium ceiling.
     "limits": dict(DEFAULT_LIMITS),
 }
 
-app = FastAPI(title="Date Spark API")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    await startup()
+    yield
+    client.close()
+
+
+app = FastAPI(title="Date Spark API", lifespan=lifespan)
 api = APIRouter(prefix="/api")
 
 
@@ -72,6 +101,28 @@ def iso(dt: datetime | None) -> str | None:
 
 
 # ---------------------------------------------------------------- models
+# Every client-supplied string/list is bounded (audit H4/H5): these values reach the LLM prompt, analytics and storage.
+Short = Annotated[str, Field(max_length=40)]
+Title = Annotated[str, Field(max_length=120)]
+
+
+class Location(BaseModel):
+    """The only location shape the API stores. Unknown keys are dropped so nothing else rides along (audit M1)."""
+
+    model_config = ConfigDict(extra="ignore")
+    label: Optional[str] = Field(default=None, max_length=120)
+    lat: Optional[float] = Field(default=None, ge=-90, le=90)
+    lng: Optional[float] = Field(default=None, ge=-180, le=180)
+
+
+def clean_location(v: Any) -> dict[str, Any] | None:
+    if v is None:
+        return None
+    if not isinstance(v, dict):
+        raise ValueError("location must be an object")
+    return Location(**v).model_dump(exclude_none=True)
+
+
 class SignupIn(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     email: EmailStr
@@ -80,53 +131,83 @@ class SignupIn(BaseModel):
 
 class LoginIn(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(max_length=128)
 
 
 class AppleAuthIn(BaseModel):
-    identity_token: str
+    identity_token: str = Field(max_length=4096)
     name: Optional[str] = Field(default=None, max_length=80)
-    email: Optional[EmailStr] = None
+    # One-time code from the native sheet; exchanged for a refresh token so the grant can be revoked on account deletion.
+    authorization_code: Optional[str] = Field(default=None, max_length=512)
+    # NOTE: any client-sent `email` is ignored — identity comes from the verified token only (audit C1).
+
+
+class GoogleAuthIn(BaseModel):
+    id_token: str = Field(max_length=4096)
+
+
+class CodeIn(BaseModel):
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+class ForgotIn(BaseModel):
+    email: EmailStr
+
+
+class ResetIn(BaseModel):
+    email: EmailStr
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class ProfileUpdate(BaseModel):
     name: Optional[str] = Field(default=None, max_length=80)
     location: Optional[dict[str, Any]] = None
 
+    @field_validator("location")
+    @classmethod
+    def _location(cls, v):
+        return clean_location(v)
+
 
 class PreferencesIn(BaseModel):
-    relationship_preferences: list[str] = []
-    favorite_vibes: list[str] = []
-    budget_preferences: list[str] = []
-    distance_preferences: list[str] = []
+    relationship_preferences: list[Short] = Field(default_factory=list, max_length=20)
+    favorite_vibes: list[Short] = Field(default_factory=list, max_length=20)
+    budget_preferences: list[Short] = Field(default_factory=list, max_length=20)
+    distance_preferences: list[Short] = Field(default_factory=list, max_length=20)
 
 
 class SubscriptionSync(BaseModel):
-    status: str  # free | trial | premium
-    provider: str = "revenuecat"
-    renewal_date: Optional[str] = None
+    status: str = Field(max_length=16)  # free | trial | premium
+    provider: str = Field(default="revenuecat", max_length=32)
+    renewal_date: Optional[str] = Field(default=None, max_length=40)
 
 
 class GenerateIn(BaseModel):
-    relationship_type: str
-    vibes: list[str] = []  # required unless surprise_me (validated below) — legacy requests behave exactly as before
-    budget: str
-    distance: str
-    location: dict[str, Any] = {}
-    exclude_titles: list[str] = []
-    date_label: Optional[str] = None
-    time_label: Optional[str] = None
-    occasion: Optional[str] = None
+    relationship_type: str = Field(max_length=32)
+    vibes: list[Short] = Field(default_factory=list, max_length=8)  # required unless surprise_me (validated below)
+    budget: str = Field(max_length=32)
+    distance: str = Field(max_length=16)
+    location: dict[str, Any] = Field(default_factory=dict)
+    exclude_titles: list[Title] = Field(default_factory=list, max_length=30)
+    date_label: Optional[str] = Field(default=None, max_length=64)
+    time_label: Optional[str] = Field(default=None, max_length=64)
+    occasion: Optional[str] = Field(default=None, max_length=120)
     surprise: bool = False
     # --- Experience Engine foundation (all optional; defaults reproduce the original behaviour) ---
     experience_type: Optional[str] = Field(default=None, max_length=32)  # couple | friends | family | celebration | travel | solo | surprise_me
     party_size: Optional[int] = Field(default=None, ge=1, le=50)
     budget_amount: Optional[float] = Field(default=None, ge=0, le=100000)  # free-form total budget in USD
     duration_hours: Optional[float] = Field(default=None, gt=0, le=24)
-    interests: list[str] = Field(default_factory=list, max_length=20)
+    interests: list[Short] = Field(default_factory=list, max_length=20)
     transport: Optional[str] = Field(default=None, max_length=16)  # walk | transit | drive
-    scheduled_at: Optional[str] = None  # ISO datetime when the experience should start
+    scheduled_at: Optional[str] = Field(default=None, max_length=40)  # ISO datetime when the experience should start
     surprise_me: bool = False  # engine picks the vibes itself (additive, distinct from `surprise`)
+
+    @field_validator("location")
+    @classmethod
+    def _location(cls, v):
+        return clean_location(v) or {}
 
     @model_validator(mode="after")
     def _vibes_required_unless_surprise_me(self):
@@ -167,26 +248,46 @@ class GenerateIn(BaseModel):
 
 
 class ScheduleIn(BaseModel):
-    date_label: Optional[str] = None
-    time_label: Optional[str] = None
-    scheduled_at: Optional[str] = None
-    share_url: Optional[str] = None
+    date_label: Optional[str] = Field(default=None, max_length=64)
+    time_label: Optional[str] = Field(default=None, max_length=64)
+    scheduled_at: Optional[str] = Field(default=None, max_length=40)
+    share_url: Optional[str] = Field(default=None, max_length=300)
 
 
-class SessionIn(BaseModel):
-    session_id: str
+# Events the app may report. Everything else (e.g. sparks_generated, entitlement_verified) is written only by the
+# server, so a client can neither inflate usage counters nor poison admin metrics (audit H5).
+CLIENT_EVENTS = {
+    "app_opened", "signup_started", "premium_viewed", "location_selected", "spark_started", "vibe_selected",
+    "surprise_me_toggled", "subscription_started", "spark_viewed", "spark_accepted", "relationship_selected",
+    "experience_type_selected", "budget_selected", "restore_started", "share_opened",
+}
+MAX_EVENT_PROPS_BYTES = 2048
 
 
 class EventIn(BaseModel):
     event: str = Field(max_length=64)
-    props: dict[str, Any] = {}
+    props: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("event")
+    @classmethod
+    def _allowed(cls, v):
+        if v not in CLIENT_EVENTS:
+            raise ValueError("unknown event")
+        return v
+
+    @field_validator("props")
+    @classmethod
+    def _small(cls, v):
+        if len(json.dumps(v, default=str)) > MAX_EVENT_PROPS_BYTES:
+            raise ValueError("props too large")
+        return v
 
 
 class ConfigUpdate(BaseModel):
     free_spark_limit: Optional[int] = Field(default=None, ge=0, le=1000)
     premium_price: Optional[float] = Field(default=None, ge=0)
     trial_days: Optional[int] = Field(default=None, ge=0)
-    promo_message: Optional[str] = None
+    promo_message: Optional[str] = Field(default=None, max_length=300)
     featured_experiences: Optional[list[dict[str, Any]]] = None
     ai_settings: Optional[dict[str, Any]] = None
     features: Optional[dict[str, bool]] = None
@@ -199,6 +300,7 @@ def public_user(u: dict) -> dict:
         "id": u["id"],
         "name": u.get("name", ""),
         "email": u["email"],
+        "email_verified": bool(u.get("email_verified")),
         "role": u.get("role", "user"),
         "location": u.get("location"),
         "subscription_status": u.get("subscription_status", "free"),
@@ -210,7 +312,9 @@ def public_user(u: dict) -> dict:
 
 def make_token(user: dict) -> str:
     return jwt.encode(
-        {"sub": user["id"], "role": user.get("role", "user"), "iat": now(), "exp": now() + timedelta(days=TOKEN_DAYS)},
+        # `tv` = token_version: bumped on password reset, account deletion and unverified-account takeover so every
+        # previously issued token stops working.
+        {"sub": user["id"], "role": user.get("role", "user"), "tv": int(user.get("token_version", 0)), "iat": now(), "exp": now() + timedelta(days=TOKEN_DAYS)},
         JWT_SECRET,
         algorithm=JWT_ALG,
     )
@@ -221,9 +325,9 @@ async def user_from_token(token: str) -> dict:
         claims = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
     except jwt.InvalidTokenError:
         raise HTTPException(401, "Invalid or expired token")
-    user = await db.users.find_one({"id": claims["sub"], "deleted_at": None}, NO_ID)
-    if not user:
-        raise HTTPException(401, "User not found")
+    user = await db.users.find_one({"id": claims.get("sub"), "deleted_at": None}, NO_ID)
+    if not user or int(claims.get("tv", 0)) != int(user.get("token_version", 0)):
+        raise HTTPException(401, "Invalid or expired token")
     return user
 
 
@@ -285,11 +389,23 @@ async def track(event: str, ident: Identity | None, props: dict | None = None):
 
 
 # ---------------------------------------------------------------- startup
-@app.on_event("startup")
 async def startup():
     await db.users.create_index("email", unique=True)
     await db.users.create_index("id", unique=True)
     await db.users.create_index("apple_sub", unique=True, sparse=True)
+    await db.users.create_index("google_sub", unique=True, sparse=True)
+    # Accounts deleted before the fix kept their provider ids, which blocked the same Apple/Google account from ever
+    # signing up again (unique index). Release them; deleted rows never match a login anyway.
+    await db.users.update_many({"deleted_at": {"$ne": None}, "$or": [{"apple_sub": {"$exists": True}}, {"google_sub": {"$exists": True}}]}, {"$unset": {"apple_sub": "", "google_sub": "", "apple_refresh_token": ""}})
+    await codes.ensure_indexes()
+    await db.geocode_cache.create_index("q", unique=True)
+    await db.geocode_cache.create_index("expires_at", expireAfterSeconds=0)
+
+    async def places_budget() -> bool:
+        cfg = await get_config()
+        return await limiter.hit("global:places", cfg["limits"]["places_calls_daily"], timedelta(days=1))
+
+    places.set_budget_guard(places_budget)
     await db.sparks.create_index([("owner_type", 1), ("owner_id", 1), ("created_at", -1)])
     await db.sparks.create_index("id", unique=True)
     await route_cache.ensure_indexes()
@@ -298,30 +414,33 @@ async def startup():
     logger.info("RevenueCat server verification: %s", rc_settings.status())
     await db.saved_sparks.create_index([("owner_type", 1), ("owner_id", 1), ("spark_id", 1)])
     await db.analytics_events.create_index([("event", 1), ("created_at", -1)])
+    await db.analytics_events.create_index("created_at", name="analytics_retention", expireAfterSeconds=ANALYTICS_RETENTION_DAYS * 86400)
     admin_email = os.environ.get("ADMIN_EMAIL", "").lower()
     admin_pw = os.environ.get("ADMIN_PASSWORD", "")
     if admin_email and admin_pw:
-        existing = await db.users.find_one({"email": admin_email})
+        # Create the admin only when the address is unused. An existing account is NEVER promoted (it could belong to
+        # anyone who registered that address first) and a deleted one is never resurrected (audit N11).
+        existing = await db.users.find_one({"email": admin_email}, {"_id": 0, "role": 1})
         if not existing:
-            await db.users.insert_one(
-                {
-                    "id": str(uuid.uuid4()),
-                    "name": "Admin",
-                    "email": admin_email,
-                    "password_hash": password_hash.hash(admin_pw),
-                    "role": "admin",
-                    "subscription_status": "premium",
-                    "created_at": now(),
-                    "deleted_at": None,
-                }
-            )
-        else:
-            await db.users.update_one({"email": admin_email}, {"$set": {"role": "admin", "deleted_at": None}})
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    client.close()
+            try:
+                await db.users.insert_one(
+                    {
+                        "id": str(uuid.uuid4()),
+                        "name": "Admin",
+                        "email": admin_email,
+                        "email_verified": True,
+                        "password_hash": password_hash.hash(admin_pw),
+                        "role": "admin",
+                        "subscription_status": "free",
+                        "token_version": 0,
+                        "created_at": now(),
+                        "deleted_at": None,
+                    }
+                )
+            except DuplicateKeyError:  # another worker seeded it first
+                pass
+        elif existing.get("role") != "admin":
+            logger.warning("ADMIN_EMAIL belongs to an existing non-admin account; not promoting it. Grant admin manually.")
 
 
 # ---------------------------------------------------------------- public config
@@ -331,9 +450,22 @@ async def public_config():
     return {k: cfg[k] for k in ("free_spark_limit", "premium_price", "trial_days", "promo_message", "featured_experiences", "features")}
 
 
+GEOCODE_TTL = timedelta(days=30)
+
+
 @api.get("/places/geocode")
-async def geocode_route(q: str):
-    result = await geocode(q.strip())
+async def geocode_route(request: Request, ident: Annotated[Identity, Depends(identity)], q: str = Query(min_length=2, max_length=120)):
+    """Billed upstream (Google Places), so it needs an identity, is throttled per IP and cached (audit H2)."""
+    query = " ".join(q.split()).lower()
+    cfg = await get_config()
+    if not await limiter.hit(f"geocode:{client_ip(request)}", cfg["limits"]["geocode_ip_hourly"], timedelta(hours=1)):
+        raise HTTPException(429, "Too many location lookups. Please try again in a bit.")
+    cached = await db.geocode_cache.find_one({"q": query}, {"_id": 0, "result": 1})
+    if cached:
+        result = cached["result"]
+    else:
+        result = await geocode(query)
+        await db.geocode_cache.update_one({"q": query}, {"$set": {"result": result, "expires_at": now() + GEOCODE_TTL}}, upsert=True)
     if not result:
         raise HTTPException(404, "We couldn't find that place. Try a city name or ZIP code.")
     return result
@@ -350,37 +482,66 @@ async def migrate_guest(guest_id: str | None, user_id: str):
     await db.analytics_events.update_many(q, update)
 
 
+# Auth throttles: attempts per hour, admin-tunable via app_config.limits (fixed windows, fail closed).
+AUTH_LIMIT_KEYS = {"login_ip": "auth_login_ip_hourly", "login_email": "auth_login_email_hourly", "signup_ip": "auth_signup_ip_hourly", "social_ip": "auth_social_ip_hourly"}
+CODE_SEND_HOURLY = 5
+
+
+async def throttle(name: str, subject: str) -> None:
+    cap = CODE_SEND_HOURLY if name == "code_send" else (await get_config())["limits"][AUTH_LIMIT_KEYS[name]]
+    if not await limiter.hit(f"auth:{name}:{subject}", cap, timedelta(hours=1)):
+        raise HTTPException(429, "Too many attempts. Please wait a bit and try again.")
+
+
+async def send_verification(user: dict) -> None:
+    if user.get("email_verified") or user["email"].endswith(".invalid"):
+        return
+    code = await codes.issue("verify_email", user["id"])
+    await mailer.send(user["email"], "Your Date Spark verification code", f"Your Date Spark code is {code}. It expires in 15 minutes.", "verify_email")
+
+
+def auth_response(user: dict) -> dict:
+    return {"access_token": make_token(user), "user": public_user(user)}
+
+
 @api.post("/auth/signup")
-async def signup(data: SignupIn, x_guest_id: Annotated[str | None, Header()] = None):
+async def signup(data: SignupIn, request: Request, x_guest_id: Annotated[str | None, Header()] = None):
+    await throttle("signup_ip", client_ip(request))
     email = data.email.lower()
-    if await db.users.find_one({"email": email}):
-        raise HTTPException(409, "That email is already registered. Try logging in.")
     user = {
         "id": str(uuid.uuid4()),
         "name": data.name.strip(),
         "email": email,
+        "email_verified": False,
         "password_hash": password_hash.hash(data.password),
         "role": "user",
         "location": None,
         "subscription_status": "free",
+        "token_version": 0,
         "created_at": now(),
         "deleted_at": None,
     }
-    await db.users.insert_one(user)
+    try:
+        await db.users.insert_one(dict(user))
+    except DuplicateKeyError:  # also covers concurrent signups for the same address (audit M3)
+        raise HTTPException(409, "That email is already registered. Try logging in.")
     await migrate_guest(x_guest_id, user["id"])
-    ident = Identity(owner_type="user", owner_id=user["id"])
-    await track("signup_completed", ident)
-    return {"access_token": make_token(user), "user": public_user(user)}
+    await track("signup_completed", Identity(owner_type="user", owner_id=user["id"]), {"provider": "email"})
+    await send_verification(user)
+    return auth_response(user)
 
 
 @api.post("/auth/login")
-async def login(data: LoginIn, x_guest_id: Annotated[str | None, Header()] = None):
-    user = await db.users.find_one({"email": data.email.lower(), "deleted_at": None}, NO_ID)
+async def login(data: LoginIn, request: Request, x_guest_id: Annotated[str | None, Header()] = None):
+    email = data.email.lower()
+    await throttle("login_ip", client_ip(request))
+    await throttle("login_email", email)
+    user = await db.users.find_one({"email": email, "deleted_at": None}, NO_ID)
     valid = password_hash.verify(data.password, user["password_hash"] if user and user.get("password_hash") else DUMMY_HASH)
     if not user or not user.get("password_hash") or not valid:
         raise HTTPException(401, "Incorrect email or password")
     await migrate_guest(x_guest_id, user["id"])
-    return {"access_token": make_token(user), "user": public_user(user)}
+    return auth_response(user)
 
 
 @api.get("/auth/me")
@@ -388,94 +549,143 @@ async def me(user: Annotated[dict, Depends(require_user)]):
     return public_user(user)
 
 
-APPLE_JWKS = jwt.PyJWKClient("https://appleid.apple.com/auth/keys", cache_keys=True)
-APPLE_AUDIENCES = [a.strip() for a in os.environ.get("APPLE_AUDIENCES", "").split(",") if a.strip()]
+@api.post("/auth/verify-email/request")
+async def verify_email_request(user: Annotated[dict, Depends(require_user)]):
+    if user.get("email_verified"):
+        return {"ok": True, "already_verified": True}
+    await throttle("code_send", f"verify:{user['id']}")
+    await send_verification(user)
+    return {"ok": True}
 
 
-@api.post("/auth/session")
-async def google_session(data: SessionIn, x_guest_id: Annotated[str | None, Header()] = None):
-    """Exchange the one-time Emergent Google Auth session_id for our own JWT."""
-    try:
-        async with httpx.AsyncClient(timeout=15) as http:
-            resp = await http.get(
-                "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
-                headers={"X-Session-ID": data.session_id},
-            )
-    except Exception as exc:
-        logger.warning("Emergent auth unreachable: %s", exc)
-        raise HTTPException(401, "Google sign-in could not be verified")
-    if resp.status_code != 200:
-        raise HTTPException(401, "Google sign-in expired or invalid. Please try again.")
-    info = resp.json()
-    email = (info.get("email") or "").lower()
-    if not email:
-        raise HTTPException(401, "Google did not return an email")
-    user = await db.users.find_one({"email": email, "deleted_at": None}, NO_ID)
+@api.post("/auth/verify-email/confirm")
+async def verify_email_confirm(data: CodeIn, user: Annotated[dict, Depends(require_user)]):
+    if user.get("email_verified"):
+        return public_user(user)
+    if not await codes.consume("verify_email", user["id"], data.code):
+        raise HTTPException(400, "That code is wrong or has expired. Request a new one.")
+    await db.users.update_one({"id": user["id"]}, {"$set": {"email_verified": True, "email_verified_at": now()}})
+    user["email_verified"] = True
+    return public_user(user)
+
+
+@api.post("/auth/password/forgot")
+async def password_forgot(data: ForgotIn, request: Request):
+    """Always 200 with the same body, so the endpoint cannot be used to discover which emails have accounts."""
+    email = data.email.lower()
+    await throttle("code_send", f"reset-ip:{client_ip(request)}")
+    if await limiter.hit(f"auth:reset_email:{email}", 3, timedelta(hours=1)):
+        user = await db.users.find_one({"email": email, "deleted_at": None}, {"_id": 0, "id": 1})
+        if user:
+            code = await codes.issue("reset_password", email)
+            await mailer.send(email, "Reset your Date Spark password", f"Your Date Spark password reset code is {code}. It expires in 15 minutes. If you didn't ask for this, ignore this email.", "reset_password")
+    return {"ok": True}
+
+
+@api.post("/auth/password/reset")
+async def password_reset(data: ResetIn, request: Request):
+    email = data.email.lower()
+    await throttle("login_ip", client_ip(request))
+    if not await codes.consume("reset_password", email, data.code):
+        raise HTTPException(400, "That code is wrong or has expired. Request a new one.")
+    user = await db.users.find_one_and_update(
+        {"email": email, "deleted_at": None},
+        # Resetting proves control of the inbox: the email is verified and every older session is revoked.
+        {"$set": {"password_hash": password_hash.hash(data.new_password), "email_verified": True}, "$inc": {"token_version": 1}},
+        projection=NO_ID,
+        return_document=True,
+    )
     if not user:
+        raise HTTPException(400, "That code is wrong or has expired. Request a new one.")
+    return auth_response(user)
+
+
+def _placeholder_email(pid: ProviderIdentity) -> str:
+    return f"{pid.provider}-{pid.sub}@users.invalid"
+
+
+async def social_login(pid: ProviderIdentity, x_guest_id: str | None, name: str | None = None, extra: dict | None = None) -> dict:
+    """Find-or-create by the provider's stable subject id. Email-based linking happens ONLY when the provider vouches
+    for the email (`email_verified`) — client-supplied emails are never used (audit C1). If the matching account's
+    own email was never verified, whoever created it never proved they own the inbox (squatting, audit N1): the
+    verified provider identity claims it, its password is removed and all of its sessions are revoked."""
+    field = f"{pid.provider}_sub"
+    extra = extra or {}
+    user = await db.users.find_one({field: pid.sub, "deleted_at": None}, NO_ID)
+    if not user and pid.email and pid.email_verified:
+        existing = await db.users.find_one({"email": pid.email, "deleted_at": None}, NO_ID)
+        if existing and not existing.get(field):
+            update: dict[str, Any] = {"$set": {field: pid.sub, **extra}}
+            if not existing.get("email_verified"):
+                update["$set"].update({"email_verified": True, "password_hash": None})
+                update["$inc"] = {"token_version": 1}
+                await track("unverified_account_claimed", Identity(owner_type="user", owner_id=existing["id"]), {"provider": pid.provider})
+            user = await db.users.find_one_and_update({"id": existing["id"]}, update, projection=NO_ID, return_document=True)
+    if not user:
+        email_taken = bool(pid.email) and await db.users.count_documents({"email": pid.email}, limit=1) > 0
+        use_email = pid.email if (pid.email and pid.email_verified and not email_taken) else _placeholder_email(pid)
         user = {
             "id": str(uuid.uuid4()),
-            "name": (info.get("name") or email.split("@")[0]).strip(),
-            "email": email,
-            "picture": info.get("picture"),
-            "google_linked": True,
+            "name": (name or pid.name or "").strip()[:80] or "Spark friend",
+            "email": use_email,
+            "email_verified": use_email == pid.email,
+            field: pid.sub,
             "password_hash": None,
             "role": "user",
             "location": None,
             "subscription_status": "free",
+            "token_version": 0,
             "created_at": now(),
             "deleted_at": None,
+            **extra,
         }
-        await db.users.insert_one(user)
-        await track("signup_completed", Identity(owner_type="user", owner_id=user["id"]), {"provider": "google"})
+        try:
+            await db.users.insert_one(dict(user))
+        except DuplicateKeyError:  # concurrent first sign-in with the same provider account
+            user = await db.users.find_one({field: pid.sub, "deleted_at": None}, NO_ID)
+            if not user:
+                raise HTTPException(409, "Please try signing in again.")
+        else:
+            await track("signup_completed", Identity(owner_type="user", owner_id=user["id"]), {"provider": pid.provider})
     else:
-        await db.users.update_one({"id": user["id"]}, {"$set": {"google_linked": True, "picture": info.get("picture") or user.get("picture")}})
+        sets = dict(extra)
+        if name and user.get("name") in (None, "", "Spark friend"):
+            sets["name"] = name.strip()[:80]
+        if sets:
+            await db.users.update_one({"id": user["id"]}, {"$set": sets})
+            user.update(sets)
     await migrate_guest(x_guest_id, user["id"])
-    return {"access_token": make_token(user), "session_token": make_token(user), "user": public_user(user)}
+    return auth_response(user)
 
 
 @api.post("/auth/apple")
-async def apple_login(data: AppleAuthIn, x_guest_id: Annotated[str | None, Header()] = None):
+async def apple_login(data: AppleAuthIn, request: Request, x_guest_id: Annotated[str | None, Header()] = None):
+    await throttle("social_ip", client_ip(request))
     try:
-        signing_key = APPLE_JWKS.get_signing_key_from_jwt(data.identity_token)
-        claims = jwt.decode(
-            data.identity_token,
-            signing_key.key,
-            algorithms=["RS256"],
-            audience=APPLE_AUDIENCES,
-            issuer="https://appleid.apple.com",
-        )
-    except Exception as exc:
+        pid = verify_apple_token(data.identity_token)
+    except ProviderError as exc:
         logger.warning("Apple token rejected: %s", exc)
         raise HTTPException(401, "Apple sign-in could not be verified")
-    apple_sub = claims["sub"]
-    token_email = (claims.get("email") or data.email or "").lower() or None
+    extra = {}
+    if data.authorization_code:
+        refresh = await apple_exchange_code(data.authorization_code)
+        if refresh:
+            extra["apple_refresh_token"] = refresh
+    return await social_login(pid, x_guest_id, name=data.name, extra=extra)
 
-    user = await db.users.find_one({"apple_sub": apple_sub, "deleted_at": None}, NO_ID)
-    if not user and token_email:
-        # Link an existing email/password account with the same verified email.
-        user = await db.users.find_one({"email": token_email, "deleted_at": None}, NO_ID)
-        if user:
-            await db.users.update_one({"id": user["id"]}, {"$set": {"apple_sub": apple_sub}})
-    if not user:
-        user = {
-            "id": str(uuid.uuid4()),
-            "name": (data.name or "").strip() or "Spark friend",
-            "email": token_email or f"apple-{apple_sub}@apple.local",
-            "apple_sub": apple_sub,
-            "password_hash": None,
-            "role": "user",
-            "location": None,
-            "subscription_status": "free",
-            "created_at": now(),
-            "deleted_at": None,
-        }
-        await db.users.insert_one(user)
-        await track("signup_completed", Identity(owner_type="user", owner_id=user["id"]), {"provider": "apple"})
-    elif data.name and user.get("name") in (None, "", "Spark friend"):
-        await db.users.update_one({"id": user["id"]}, {"$set": {"name": data.name.strip()}})
-        user["name"] = data.name.strip()
-    await migrate_guest(x_guest_id, user["id"])
-    return {"access_token": make_token(user), "user": public_user(user)}
+
+@api.post("/auth/google")
+async def google_login(data: GoogleAuthIn, request: Request, x_guest_id: Annotated[str | None, Header()] = None):
+    """Native Google Sign-In: the app sends the Google ID token; it is verified here against Google's keys and one of
+    GOOGLE_CLIENT_IDS (replaces the Emergent demo-auth session exchange, audit H3)."""
+    await throttle("social_ip", client_ip(request))
+    try:
+        pid = verify_google_token(data.id_token)
+    except ProviderError as exc:
+        logger.warning("Google token rejected: %s", exc)
+        raise HTTPException(401, "Google sign-in could not be verified")
+    extra = {"google_linked": True, **({"picture": pid.picture} if pid.picture else {})}
+    return await social_login(pid, x_guest_id, extra=extra)
 
 
 @api.put("/users/me")
@@ -489,13 +699,30 @@ async def update_me(data: ProfileUpdate, user: Annotated[dict, Depends(require_u
 
 @api.delete("/auth/account")
 async def delete_account(user: Annotated[dict, Depends(require_user)]):
-    # Soft delete: keep records recoverable, remove identifying info.
+    """Deletes the account's personal data and content. A tombstone row (id + deleted_at) remains so ids are never
+    reused and RevenueCat events for the id are ignored. Provider links are removed (the same Apple/Google account
+    can sign up again), every token is revoked, and the Sign in with Apple grant is revoked when we hold one."""
+    if user.get("apple_refresh_token"):
+        try:
+            await apple_revoke(user["apple_refresh_token"])
+        except Exception as exc:  # never block deletion on Apple's availability
+            logger.error("Apple revoke failed: %s", type(exc).__name__)
+    uid = user["id"]
+    mine = {"owner_type": "user", "owner_id": uid}
     await db.users.update_one(
-        {"id": user["id"]},
-        {"$set": {"deleted_at": now(), "email": f"deleted-{user['id']}@deleted.local", "name": "Deleted user", "location": None}},
+        {"id": uid},
+        {
+            "$set": {"deleted_at": now(), "email": f"deleted-{uid}@deleted.invalid", "name": "Deleted user", "location": None, "password_hash": None, "email_verified": False, "picture": None},
+            "$unset": {"apple_sub": "", "google_sub": "", "apple_refresh_token": ""},
+            "$inc": {"token_version": 1},
+        },
     )
-    await db.sparks.update_many({"owner_type": "user", "owner_id": user["id"]}, {"$set": {"deleted_at": now()}})
-    await db.saved_sparks.update_many({"owner_type": "user", "owner_id": user["id"]}, {"$set": {"deleted_at": now()}})
+    await db.sparks.delete_many(mine)
+    await db.saved_sparks.delete_many(mine)
+    await db.user_preferences.delete_many(mine)
+    await db.subscriptions.delete_many({"user_id": uid})
+    await db.auth_codes.delete_many({"subject": {"$in": [uid, user.get("email")]}})
+    await db.analytics_events.update_many(mine, {"$set": {"owner_id": "deleted", "props": {}}})
     return {"ok": True}
 
 
@@ -596,6 +823,18 @@ async def spark_usage(ident: Annotated[Identity, Depends(identity)]):
     return await usage_for(ident, await get_config())
 
 
+def coarse_area(loc: dict) -> str | None:
+    lat, lng = loc.get("lat"), loc.get("lng")
+    return f"{round(lat, 1)},{round(lng, 1)}" if isinstance(lat, (int, float)) and isinstance(lng, (int, float)) else None
+
+
+async def refund_once_per_day(ident: Identity, receipt: dict) -> None:
+    """Paid calls (Places, Claude) may already have run when generation fails, so failures are refunded at most once
+    per identity per day — enough for a genuine glitch, useless for farming free paid work (audit N9)."""
+    if await limiter.hit(f"refund:{ident.owner_type}:{ident.owner_id}", 1, timedelta(days=1)):
+        await limiter.release(receipt)
+
+
 @api.post("/sparks/generate")
 async def generate(
     data: GenerateIn,
@@ -606,12 +845,20 @@ async def generate(
     cfg = await get_config()
     # X-Premium is a client claim and is IGNORED for limits (kept only for analytics). Only server-verified status
     # unlocks the Premium lane. All limits are reserved atomically here, BEFORE any Claude / Google Places call.
+    if not cfg.get("features", {}).get("generation_enabled", True):
+        raise HTTPException(503, "Spark creation is paused for a moment. Please try again soon.")
     premium_verified = await verified_entitlement(ident, cfg)
     try:
         receipt = await limiter.reserve_generation(ip=client_ip(request), owner_type=ident.owner_type, owner_id=ident.owner_id, premium_verified=premium_verified, cfg=cfg)
     except LimitExceeded as exc:
         await track("generation_rate_limited", ident, {"scope": exc.scope, "premium_claim": x_premium == "1", "premium_verified": premium_verified})
         raise HTTPException(exc.status, exc.message)
+    # Server-wide daily ceiling on paid generations (audit N10). Counted after the per-identity checks so blocked
+    # traffic doesn't consume it; the identity units just taken are handed back.
+    if not await limiter.hit("global:generations", cfg["limits"]["global_generations_daily"], timedelta(days=1)):
+        await limiter.release(receipt)
+        logger.error("global daily generation ceiling reached")
+        raise HTTPException(503, "Spark creation is very busy right now. Please try again later.")
 
     prefs = await db.user_preferences.find_one({"owner_type": ident.owner_type, "owner_id": ident.owner_id}, NO_ID) or {}
     recent = await db.sparks.find({"owner_type": ident.owner_type, "owner_id": ident.owner_id}, NO_ID).sort("created_at", -1).limit(10).to_list(10)
@@ -640,12 +887,12 @@ async def generate(
             real_routing=cfg.get("features", {}).get("real_routing", False),
             route_cache=route_cache,
         )
-    except Exception as exc:
+    except Exception:
         logger.exception("Spark generation failed")
-        await limiter.release(receipt)
-        raise HTTPException(502, f"Our Spark engine hit a snag: {str(exc)[:120]}")
+        await refund_once_per_day(ident, receipt)
+        raise HTTPException(502, "Our Spark engine hit a snag. Please try again.")
     if not sparks:
-        await limiter.release(receipt)
+        await refund_once_per_day(ident, receipt)
         raise HTTPException(404, "We couldn't find the perfect Spark yet.")
 
     docs = []
@@ -667,6 +914,7 @@ async def generate(
                 "occasion": data.occasion,
                 "surprise": data.surprise,
                 "revealed_steps": 1 if data.surprise else len(s.get("activities", [])),
+                "fully_revealed_at": None,
                 # Experience Engine foundation fields (additive)
                 "experience_type": data.resolved_experience_type(),
                 "party_size": data.party_size,
@@ -686,7 +934,8 @@ async def generate(
     await track(
         "sparks_generated",
         ident,
-        {"relationship_type": data.relationship_type.lower(), "vibes": data.vibes, "budget": data.budget, "distance": data.distance, "location": data.location.get("label"), "occasion": data.occasion, "surprise": data.surprise, "experience_type": data.resolved_experience_type(), "surprise_me": data.surprise_me, "titles": [d["title"] for d in docs]},
+        # No free text or precise location in analytics (audit N13): occasion → flag, location → ~10 km grid cell.
+        {"relationship_type": data.relationship_type.lower(), "vibes": data.vibes, "budget": data.budget, "distance": data.distance, "area": coarse_area(data.location), "has_occasion": bool(data.occasion), "surprise": data.surprise, "experience_type": data.resolved_experience_type(), "surprise_me": data.surprise_me, "titles": [d["title"] for d in docs]},
     )
     usage = await usage_for(ident, cfg)
     return {"sparks": [serialize_spark(d, set()) for d in docs], "usage": usage}
@@ -705,8 +954,14 @@ async def my_sparks(ident: Annotated[Identity, Depends(identity)]):
         for s in await db.sparks.find({"id": {"$in": missing}}, NO_ID).to_list(200):
             by_id[s["id"]] = s
     saved_set = set(saved_ids)
+
+    def as_seen_by_me(sp: dict) -> dict:
+        if sp["owner_type"] == ident.owner_type and sp["owner_id"] == ident.owner_id:
+            return {**serialize_spark(sp, saved_set), "is_owner": True}
+        return {**viewer_view(sp), "saved": True, "is_owner": False}  # someone else's (shared) spark — audit N2
+
     return {
-        "saved": [serialize_spark(by_id[sid], saved_set) for sid in saved_ids if sid in by_id],
+        "saved": [as_seen_by_me(by_id[sid]) for sid in saved_ids if sid in by_id],
         "created": [serialize_spark(s, saved_set) for s in all_mine if s.get("status") in ("sparked", "scheduled") and not s.get("completed_at")],
         "completed": [serialize_spark(s, saved_set) for s in all_mine if s.get("completed_at")],
         "recent": [serialize_spark(s, saved_set) for s in all_mine[:6]],
@@ -719,10 +974,15 @@ PLAN_INPUT_FIELDS = ("experience_type", "party_size", "budget_amount", "duration
 
 
 def surprise_unlocked(s: dict) -> bool:
-    """A surprise plan is visible to the recipient once its scheduled time has passed, it's fully revealed, or completed."""
+    """A surprise plan is visible to the recipient once its scheduled time has passed, the owner has revealed every
+    stop (an explicit action, `fully_revealed_at`), or it's completed. The owner's starting state never unlocks it —
+    previously a one-stop surprise was "fully revealed" the moment it was created (audit N3)."""
     if not s.get("surprise"):
         return True
-    if s.get("completed_at") or s.get("revealed_steps", 0) >= len(s.get("activities", [])):
+    if s.get("completed_at") or s.get("fully_revealed_at"):
+        return True
+    total = len(s.get("activities") or [])
+    if "fully_revealed_at" not in s and total > 1 and s.get("revealed_steps", 0) >= total:  # sparks created before the fix
         return True
     sched = s.get("scheduled_at")
     if sched:
@@ -756,6 +1016,20 @@ def redact_for_recipient(out: dict) -> dict:
     return out
 
 
+# The ONLY fields anyone other than the owner ever receives (audit M1/N2): no owner inputs, raw location or ids.
+VIEWER_KEYS = ("id", "title", "emoji", "tagline", "description", "primary_vibe", "vibe_tags", "estimated_cost", "estimated_duration", "activities", "location_label", "date_label", "time_label", "scheduled_at", "lat", "lng", "needs_verification", "surprise", "dress_code", "revealed_steps", "fully_revealed_at", "completed_at", "occasion", *OUTPUT_FIELDS, *PLAN_INPUT_FIELDS)
+
+
+def viewer_view(s: dict) -> dict:
+    out = {k: s.get(k) for k in VIEWER_KEYS}
+    out["completed_at"] = iso(s.get("completed_at"))
+    if "fully_revealed_at" in s:
+        out["fully_revealed_at"] = iso(s.get("fully_revealed_at"))
+    else:
+        out.pop("fully_revealed_at")  # sparks from before the fix: let surprise_unlocked() apply the legacy rule
+    return redact_for_recipient(out)
+
+
 @api.get("/sparks/{spark_id}")
 async def get_spark(spark_id: str, ident: Annotated[Identity | None, Depends(identity)] = None):
     s = await db.sparks.find_one({"id": spark_id}, NO_ID)
@@ -765,10 +1039,9 @@ async def get_spark(spark_id: str, ident: Annotated[Identity | None, Depends(ide
     if ident:
         saved = await db.saved_sparks.find_one({"owner_type": ident.owner_type, "owner_id": ident.owner_id, "spark_id": spark_id, "deleted_at": None}) is not None
         await track("spark_viewed", ident, {"spark_id": spark_id, "title": s["title"]})
-    out = serialize_spark(s, {spark_id} if saved else set())
-    out["is_owner"] = bool(ident and s["owner_type"] == ident.owner_type and s["owner_id"] == ident.owner_id)
-    if not out["is_owner"]:
-        out = redact_for_recipient(out)
+    is_owner = bool(ident and s["owner_type"] == ident.owner_type and s["owner_id"] == ident.owner_id)
+    out = serialize_spark(s, {spark_id} if saved else set()) if is_owner else {**viewer_view(s), "saved": saved}
+    out["is_owner"] = is_owner
     return out
 
 
@@ -778,8 +1051,7 @@ async def shared_spark(spark_id: str):
     s = await db.sparks.find_one({"id": spark_id}, NO_ID)
     if not s:
         raise HTTPException(404, "Spark not found")
-    keys = ("id", "title", "emoji", "tagline", "description", "primary_vibe", "vibe_tags", "estimated_cost", "estimated_duration", "activities", "location_label", "date_label", "time_label", "scheduled_at", "lat", "lng", "needs_verification", "surprise", "dress_code", "revealed_steps", "completed_at", "occasion", *OUTPUT_FIELDS, *PLAN_INPUT_FIELDS)
-    return redact_for_recipient({k: s.get(k) for k in keys})
+    return viewer_view(s)
 
 
 @api.put("/sparks/{spark_id}/reveal")
@@ -789,7 +1061,10 @@ async def reveal_step(spark_id: str, ident: Annotated[Identity, Depends(identity
         raise HTTPException(404, "Spark not found")
     total = len(s.get("activities", []))
     revealed = min(s.get("revealed_steps", 1) + 1, total)
-    await db.sparks.update_one({"id": spark_id}, {"$set": {"revealed_steps": revealed}})
+    sets: dict[str, Any] = {"revealed_steps": revealed}
+    if revealed >= total and not s.get("fully_revealed_at"):
+        sets["fully_revealed_at"] = now()  # the owner revealed the last stop → the recipient may now see the plan
+    await db.sparks.update_one({"id": spark_id}, {"$set": sets})
     await track("surprise_step_revealed", ident, {"spark_id": spark_id, "step": revealed})
     return {"revealed_steps": revealed, "total": total}
 
@@ -929,7 +1204,7 @@ async def admin_stats(_: Annotated[dict, Depends(require_admin)]):
         "generate_to_share_rate": round((sharers / generators) * 100, 1) if generators else 0.0,
         "popular_relationships": await top_values("relationship_type"),
         "popular_vibes": await top_values("vibes", unwind=True),
-        "popular_locations": await top_values("location"),
+        "popular_locations": await top_values("area"),
         "popular_experiences": await top_values("titles", unwind=True),
     }
 
@@ -950,6 +1225,16 @@ async def update_config(data: ConfigUpdate, _: Annotated[dict, Depends(require_a
     if updates:
         await db.app_config.update_one({"key": "main"}, {"$set": updates}, upsert=True)
     return await get_config()
+
+
+@api.get("/healthz")
+async def healthz():
+    """Liveness + database reachability for the load balancer / uptime checks (no auth, no secrets)."""
+    try:
+        await asyncio.wait_for(db.command("ping"), timeout=2)
+    except Exception:
+        raise HTTPException(503, "database unavailable")
+    return {"ok": True}
 
 
 @api.get("/")
@@ -981,6 +1266,8 @@ async def revenuecat_webhook(
     except SignatureError as exc:
         await track("revenuecat_webhook_rejected", None, {"reason": str(exc)})
         raise HTTPException(401, "Invalid webhook signature")
+    except WebhookRetry:
+        raise HTTPException(503, "Temporary processing failure; please redeliver")
     await track("revenuecat_webhook_received", None, {k: v for k, v in result.items() if k != "applied"})
     return result
 
@@ -1017,5 +1304,110 @@ async def admin_entitlement_backfill(_: Annotated[dict, Depends(require_admin)],
     return await entitlements.backfill(dry_run=data.dry_run, limit=data.limit, user_ids=data.user_ids)
 
 
+# ---------------------------------------------------------------- invitation links (outside /api; audit H7)
+# EXPO_PUBLIC_SHARE_BASE_URL in the app points at this server's origin. People without the app get a readable page;
+# phones with the app open it directly via universal links / App Links (files below).
+web = APIRouter()
+
+
+@web.get("/.well-known/apple-app-site-association")
+async def apple_app_site_association():
+    app_id = os.environ.get("APPLE_APP_ID")  # "<TEAMID>.<bundle id>"
+    if not app_id:
+        raise HTTPException(404, "Not configured")
+    return {"applinks": {"apps": [], "details": [{"appIDs": [app_id], "components": [{"/": "/s/*"}]}]}}
+
+
+@web.get("/.well-known/assetlinks.json")
+async def android_asset_links():
+    package, fingerprints = os.environ.get("ANDROID_PACKAGE"), [f.strip() for f in os.environ.get("ANDROID_SHA256_FINGERPRINTS", "").split(",") if f.strip()]
+    if not package or not fingerprints:
+        raise HTTPException(404, "Not configured")
+    return [{"relation": ["delegate_permission/common.handle_all_urls"], "target": {"namespace": "android_app", "package_name": package, "sha256_cert_fingerprints": fingerprints}}]
+
+
+def _invite_html(v: dict, spark_id: str) -> str:
+    e = html.escape
+    store_links = "".join(
+        f'<a class="store" href="{e(url)}">{label}</a>'
+        for label, url in (("App Store", os.environ.get("APP_STORE_URL")), ("Google Play", os.environ.get("PLAY_STORE_URL")))
+        if url
+    )
+    if v.get("locked_for_recipient"):
+        body = f"<p>{e(v.get('description') or '')}</p>"
+        if v.get("meet_place") or v.get("meet_time"):
+            body += f"<p><b>Meet</b> {e(v.get('meet_time') or '')} {('at ' + e(v.get('meet_place'))) if v.get('meet_place') else ''}</p>"
+        if v.get("dress_code"):
+            body += f"<p><b>Dress code</b> {e(v['dress_code'])}</p>"
+    else:
+        stops = "".join(f"<li><b>{e(a.get('start_time') or '')}</b> {e(a.get('activity_name') or '')}{(' — ' + e(a['venue'])) if a.get('venue') else ''}</li>" for a in (v.get("activities") or []))
+        body = f"<p>{e(v.get('description') or '')}</p><ol>{stops}</ol>"
+    when = " · ".join(x for x in (v.get("date_label"), v.get("time_label")) if x)
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex"><title>{e(v.get('title') or 'Date Spark')}</title>
+<style>body{{font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;padding:24px;background:#FFF9F5;color:#1d1a19;line-height:1.5}}
+.open{{display:block;text-align:center;background:#E8456B;color:#fff;padding:14px;border-radius:999px;text-decoration:none;font-weight:700;margin:24px 0 12px}}
+.store{{margin-right:16px;color:#E8456B}}</style></head><body>
+<p>Date Spark ✨ invitation</p><h1>{e(v.get('emoji') or '')} {e(v.get('title') or '')}</h1><p>{e(v.get('tagline') or '')}</p>
+{f'<p><b>When</b> {e(when)}</p>' if when else ''}{body}
+<a class="open" href="datespark://spark/{e(spark_id)}">Open in Date Spark</a><p>{store_links}</p></body></html>"""
+
+
+@web.get("/s/{spark_id}", response_class=HTMLResponse)
+async def invite_page(spark_id: str):
+    s = await db.sparks.find_one({"id": spark_id}, NO_ID)
+    if not s:
+        raise HTTPException(404, "This invitation doesn't exist anymore.")
+    return HTMLResponse(_invite_html(viewer_view(s), spark_id), headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+
+MAX_BODY_BYTES = 64 * 1024
+
+
+class BodySizeLimit:
+    """Reject request bodies over MAX_BODY_BYTES (declared or streamed) with 413 before the app reads them."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        declared = dict(scope.get("headers") or []).get(b"content-length")
+        if declared and declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+            return await self._reject(send)
+        seen = 0
+
+        async def limited_receive():
+            nonlocal seen
+            message = await receive()
+            if message["type"] == "http.request":
+                seen += len(message.get("body", b""))
+                if seen > MAX_BODY_BYTES:
+                    raise _TooLarge()
+            return message
+
+        try:
+            await self.app(scope, limited_receive, send)
+        except _TooLarge:
+            await self._reject(send)
+
+    @staticmethod
+    async def _reject(send):
+        await send({"type": "http.response.start", "status": 413, "headers": [(b"content-type", b"application/json")]})
+        await send({"type": "http.response.body", "body": b'{"detail":"Request body too large"}'})
+
+
+class _TooLarge(Exception):
+    pass
+
+
 app.include_router(api)
-app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.include_router(web)
+# Auth is a bearer header, never a cookie, so credentials are not needed for CORS (audit M7). Set CORS_ORIGINS
+# (comma-separated) to the web app's origin(s) in production; unset keeps the API open to any origin without credentials.
+_cors = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()] or ["*"]
+# Order matters: the last middleware added is the outermost. CORS must wrap BodySizeLimit so a 413 still carries CORS
+# headers (otherwise browsers report an opaque network error instead of "too large").
+app.add_middleware(BodySizeLimit)
+app.add_middleware(CORSMiddleware, allow_credentials=False, allow_origins=_cors, allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], allow_headers=["Authorization", "Content-Type", "X-Guest-ID", "X-Premium"])

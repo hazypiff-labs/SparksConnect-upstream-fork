@@ -20,9 +20,9 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 from limits import DEFAULT_LIMITS, LimitExceeded, Limiter, client_ip, limits_from  # noqa: E402
 
-LOCAL = "http://localhost:8001/api"
-PUBLIC = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://vibe-finder-75.preview.emergentagent.com").rstrip("/") + "/api"
-ADMIN = {"email": "admin@datespark.app", "password": "SparkAdmin2026!"}
+LOCAL = os.environ["SPARKS_TEST_BASE_URL"] + "/api"
+PUBLIC = os.environ["SPARKS_TEST_BASE_URL"].rstrip("/") + "/api"
+ADMIN = {"email": os.environ["SPARKS_TEST_ADMIN_EMAIL"], "password": os.environ["SPARKS_TEST_ADMIN_PASSWORD"]}
 AUSTIN = {"label": "Austin, TX", "lat": 30.2672, "lng": -97.7431}
 BODY = {"relationship_type": "partner", "vibes": ["fun"], "budget": "25-50", "distance": "10", "location": AUSTIN}
 CFG = {"free_spark_limit": 3, "limits": dict(DEFAULT_LIMITS)}
@@ -172,7 +172,7 @@ def test_limiter_outage_fails_closed():
     assert e.value.status == 429 and e.value.scope == "limiter_unavailable"
 
 
-def test_client_ip_prefers_proxy_set_headers_and_ignores_forged_first_hop():
+def test_client_ip_prefers_proxy_set_headers_and_ignores_forged_first_hop(monkeypatch):
     class R:
         def __init__(self, headers, host="10.0.0.1"):
             self.headers, self.client = headers, type("C", (), {"host": host})()
@@ -181,7 +181,16 @@ def test_client_ip_prefers_proxy_set_headers_and_ignores_forged_first_hop():
     assert client_ip(R({"x-forwarded-for": "203.0.113.5, 172.69.1.1, 34.160.1.1"})) == "203.0.113.5"
     assert client_ip(R({"x-forwarded-for": "1.2.3.4, 203.0.113.5, 172.69.1.1, 34.160.1.1"})) == "203.0.113.5"
     assert client_ip(R({"x-forwarded-for": "203.0.113.9"})) == "203.0.113.9"  # direct / fewer hops than trusted
+    # CF-Connecting-IP is client-forgeable unless the origin only accepts Cloudflare traffic (audit H1)
+    assert client_ip(R({"cf-connecting-ip": "203.0.113.6", "x-forwarded-for": "9.9.9.9, 1.1.1.1, 2.2.2.2"})) == "9.9.9.9"
+    monkeypatch.setenv("TRUST_CF_HEADER", "1")
     assert client_ip(R({"cf-connecting-ip": "203.0.113.6", "x-forwarded-for": "9.9.9.9, 1.1.1.1, 2.2.2.2"})) == "203.0.113.6"
+    assert client_ip(R({"cf-connecting-ip": "not-an-ip", "x-forwarded-for": "9.9.9.9, 1.1.1.1, 2.2.2.2"})) == "9.9.9.9"
+    monkeypatch.delenv("TRUST_CF_HEADER")
+    assert client_ip(R({"x-forwarded-for": "garbage, 1.1.1.1, 2.2.2.2"})) == "10.0.0.1"  # unparsable → socket peer
+    monkeypatch.setenv("TRUSTED_PROXY_HOPS", "0")
+    assert client_ip(R({"x-forwarded-for": "203.0.113.5, 172.69.1.1, 34.160.1.1"})) == "10.0.0.1"  # direct deploy
+    monkeypatch.delenv("TRUSTED_PROXY_HOPS")
     assert client_ip(R({})) == "10.0.0.1"
 
 
@@ -289,6 +298,9 @@ def test_happy_path_response_shape_with_engine_mocked(monkeypatch):
                  "total_estimated_cost": 10.0, "per_person_cost": None, "priced_stops": 1, "unpriced_stops": 0, "complete": True, "routing_source": None}]
 
     monkeypatch.setattr(server, "generate_sparks", fake_engine)
+    from conftest import rebind_server_db
+
+    rebind_server_db()
     with TestClient(server.app) as c:
         g = guest()
         r = c.post("/api/sparks/generate", headers={"X-Guest-ID": g, "X-Forwarded-For": ip()}, json=BODY)

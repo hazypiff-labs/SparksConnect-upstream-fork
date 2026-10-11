@@ -15,6 +15,7 @@ Fail-closed: if the counter store is unavailable the request is denied (429), ne
 """
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -31,6 +32,15 @@ DEFAULT_LIMITS = {
     "guest_ids_per_ip_daily": 20,
     "premium_daily_cap": 15,
     "premium_monthly_cap": 60,
+    # Auth throttles (attempts per hour) — audit M4
+    "auth_login_ip_hourly": 60,
+    "auth_login_email_hourly": 10,
+    "auth_signup_ip_hourly": 20,
+    "auth_social_ip_hourly": 60,
+    # Cost controls — audit H2 / N10
+    "geocode_ip_hourly": 60,
+    "global_generations_daily": 5000,  # server-wide ceiling on paid generations (Claude + Places) per UTC day
+    "places_calls_daily": 30000,  # server-wide ceiling on Google Places requests per UTC day
 }
 
 LIMIT_FIELDS = tuple(DEFAULT_LIMITS)
@@ -51,19 +61,31 @@ def trusted_proxy_hops() -> int:
         return 2
 
 
+def _valid_ip(value: str | None) -> str | None:
+    try:
+        return str(ipaddress.ip_address((value or "").strip()))
+    except ValueError:
+        return None
+
+
 def client_ip(request: Request) -> str:
-    """Real client address behind the proxy chain. Observed chain on this platform: X-Forwarded-For =
-    "<client>, <CDN>, <load balancer>" — two trusted hops append themselves, so the client is the entry
-    TRUSTED_PROXY_HOPS+1 from the end. Anything the client prepends itself is further left and ignored; the
-    last entries are shared infrastructure and must never be used (everyone would share one bucket).
-    `CF-Connecting-IP` (set by the CDN) wins when present."""
-    cf = request.headers.get("cf-connecting-ip")
-    if cf:
-        return cf.strip()
+    """Real client address behind the proxy chain. Observed chain on the original platform: X-Forwarded-For =
+    "<client>, <CDN>, <load balancer>" — TRUSTED_PROXY_HOPS trusted hops append themselves, so the client is the entry
+    TRUSTED_PROXY_HOPS+1 from the end; anything the client prepends itself is further left and ignored. Set
+    TRUSTED_PROXY_HOPS=0 when the app is reached directly (then only the socket peer is used).
+    `CF-Connecting-IP` is honoured ONLY with TRUST_CF_HEADER=1, i.e. when the origin accepts traffic from Cloudflare
+    alone — otherwise any client could send it and pick its own rate-limit bucket (audit H1)."""
+    if os.environ.get("TRUST_CF_HEADER") == "1":
+        cf = _valid_ip(request.headers.get("cf-connecting-ip"))
+        if cf:
+            return cf
+    hops = trusted_proxy_hops()
     xff = [p.strip() for p in request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
-    if xff:
-        hops = trusted_proxy_hops()
-        return xff[-(hops + 1)] if len(xff) > hops else xff[0]
+    if hops and xff:
+        candidate = xff[-(hops + 1)] if len(xff) > hops else xff[0]
+        ip = _valid_ip(candidate)
+        if ip:
+            return ip
     return request.client.host if request.client else "unknown"
 
 
@@ -109,6 +131,23 @@ class Limiter:
             await self.db.rate_limits.update_one({"key": key, "count": {"$gt": 0}}, {"$inc": {"count": -1}})
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("limit release failed: %s", exc)
+
+    async def hit(self, key: str, cap: int, ttl: timedelta, now: datetime | None = None) -> bool:
+        """Count one attempt against `key` in a fixed window of `ttl`; False once the cap is exceeded.
+        Fails closed (False) when the store is unavailable."""
+        now = now or datetime.now(timezone.utc)
+        bucket = int(now.timestamp() // ttl.total_seconds())
+        full_key = f"{key}:{bucket}"
+        try:
+            if await self._reserve(full_key, cap, now + ttl) <= cap:
+                return True
+            # Rejected attempts don't accumulate, so raising the cap takes effect immediately (no lock-in until the
+            # window rolls over).
+            await self._release(full_key)
+            return False
+        except Exception as exc:
+            logger.error("rate limiter unavailable — failing closed: %s", type(exc).__name__)
+            return False
 
     async def _is_new_guest(self, guest_id: str, expires_at: datetime) -> bool:
         res = await self.db.rate_limits.update_one({"key": f"guest-seen:{guest_id}"}, {"$setOnInsert": {"expires_at": expires_at, "count": 0}}, upsert=True)

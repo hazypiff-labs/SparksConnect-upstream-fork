@@ -25,8 +25,8 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 import entitlements as ent  # noqa: E402
 from entitlements import EntitlementStore, LookupFailure, RevenueCatClient, Settings, SignatureError, sign, verify_signature  # noqa: E402
 
-LOCAL = "http://localhost:8001/api"
-ADMIN = {"email": "admin@datespark.app", "password": "SparkAdmin2026!"}
+LOCAL = os.environ["SPARKS_TEST_BASE_URL"] + "/api"
+ADMIN = {"email": os.environ["SPARKS_TEST_ADMIN_EMAIL"], "password": os.environ["SPARKS_TEST_ADMIN_PASSWORD"]}
 WEBHOOK_SECRET = os.environ.get("REVENUECAT_WEBHOOK_SECRET", "")
 AUSTIN = {"label": "Austin, TX", "lat": 30.2672, "lng": -97.7431}
 BODY = {"relationship_type": "partner", "vibes": ["fun"], "budget": "25-50", "distance": "10", "location": AUSTIN}
