@@ -2,7 +2,7 @@ import React from "react";
 import { Text, View } from "react-native";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
-import { useRouter } from "expo-router";
+import { Redirect, useRouter } from "expo-router";
 import Animated, { FadeInDown, FadeInUp } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@react-native-vector-icons/ionicons";
@@ -11,6 +11,7 @@ import { track } from "@/src/api";
 import { Button, SparkGlyph } from "@/src/components/ui";
 import { IMAGES } from "@/src/constants";
 import { useSession } from "@/src/session";
+import { useGoogleSignIn } from "@/src/useGoogleSignIn";
 import { fonts, makeStyles, spacing, useTheme } from "@/src/theme";
 
 const useStyles = makeStyles((c) => ({
@@ -31,7 +32,9 @@ export default function Welcome() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { googleLogin, googleBusy } = useSession();
+  const { user, ready } = useSession();
+  const google = useGoogleSignIn(() => router.replace("/(tabs)/home"), () => {});
+  if (ready && user) return <Redirect href="/(tabs)/home" />;
   return (
     <View style={s.root} testID="welcome-screen">
       <Image source={{ uri: IMAGES.welcome }} style={s.image} contentFit="cover" transition={500} />
@@ -55,14 +58,16 @@ export default function Welcome() {
                 router.replace("/(tabs)/create");
               }}
             />
-            <Button
-              title="Continue with Google"
-              variant="glass"
-              testID="welcome-google-button"
-              loading={googleBusy}
-              onPress={() => googleLogin().catch(() => {})}
-              icon={<Ionicons name="logo-google" size={18} color={colors.onSurfaceInverse} />}
-            />
+            {google.ready ? (
+              <Button
+                title="Continue with Google"
+                variant="glass"
+                testID="welcome-google-button"
+                loading={google.busy}
+                onPress={google.start}
+                icon={<Ionicons name="logo-google" size={18} color={colors.onSurfaceInverse} />}
+              />
+            ) : null}
             <Button title="Log In" variant="ghost" testID="welcome-login-button" onPress={() => router.push({ pathname: "/auth", params: { mode: "login" } })} style={{ opacity: 0.95 }} />
             <Button title="Explore first" variant="ghost" testID="welcome-explore-button" onPress={() => router.replace("/(tabs)/home")} style={{ opacity: 0.9 }} />
           </Animated.View>

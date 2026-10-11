@@ -1,16 +1,19 @@
 import React, { useEffect, useState } from "react";
-import { Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { Modal, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
+import Purchases, { type PurchasesPackage } from "react-native-purchases";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { api, track } from "@/src/api";
+import { track } from "@/src/api";
+import { LegalLinks } from "@/src/components/LegalLinks";
 import { Button, SparkGlyph, StickyFooter, useToast } from "@/src/components/ui";
 import { IMAGES, PREMIUM_FEATURES } from "@/src/constants";
-import { useSubscription } from "@/src/revenuecat";
+import { rcEnabled, rcUsingTestStore, useSubscription } from "@/src/revenuecat";
+import { trialLabel } from "@/src/trial";
 import { useSession } from "@/src/session";
 import { fonts, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
@@ -52,7 +55,6 @@ export default function Premium() {
   const toast = useToast();
   const { user, identityError, isPremium } = useSession();
   const { offerings, purchase, restore, isPurchasing, isRestoring, identityReady, isLoading } = useSubscription();
-  const config = useQuery({ queryKey: ["config"], queryFn: () => api("/config/public") });
   const [confirm, setConfirm] = useState(false);
 
   useEffect(() => {
@@ -60,9 +62,9 @@ export default function Premium() {
   }, [reason]);
 
   const pkg = offerings?.current?.availablePackages.find((p) => p.identifier === "$rc_monthly") ?? offerings?.current?.availablePackages[0];
-  const configPrice = config.data ? `$${Number(config.data.premium_price).toFixed(2)}` : "$24.99";
-  const priceString = pkg && pkg.product.price > 0 ? pkg.product.priceString : configPrice;
-  const trialDays = config.data?.trial_days ?? 14;
+  // Price and trial come ONLY from the store product the user will actually be charged for (App Store 3.1.2, audit C3).
+  const priceString = pkg ? pkg.product.priceString : null;
+  const { trial, checking: checkingTrial } = useTrialOffer(pkg);
 
   const doPurchase = async () => {
     setConfirm(false);
@@ -79,11 +81,16 @@ export default function Premium() {
   };
 
   const doRestore = async () => {
+    if (!user) {
+      toast.show("Log in first so restored purchases are added to your account", "info");
+      return;
+    }
+    track("restore_started");
     try {
       const info = await restore();
       toast.show(info.entitlements.active.pro ? "Premium restored ✨" : "No previous purchase found", info.entitlements.active.pro ? "success" : "info");
     } catch (e: any) {
-      toast.show(e?.message ?? "Restore failed", "error");
+      toast.show(e?.message === "identity_not_ready" ? "Please log in before restoring" : e?.message ?? "Restore failed", "error");
     }
   };
 
@@ -114,14 +121,22 @@ export default function Premium() {
               <Text style={s.featureText}>{f}</Text>
             </View>
           ))}
-          <View style={s.priceCard} testID="premium-price-card">
-            <Text style={s.price}>{priceString}/month</Text>
-            <Text style={s.priceSub}>{trialDays}-day free trial for everyone. Cancel anytime.</Text>
-          </View>
+          {priceString ? (
+            <View style={s.priceCard} testID="premium-price-card">
+              <Text style={s.price}>{priceString}/month</Text>
+              <Text style={s.priceSub}>{trial ? `${trial} free trial, then ${priceString}/month. Cancel anytime.` : "Cancel anytime."}</Text>
+            </View>
+          ) : null}
           {isPremium ? (
             <View style={s.banner} testID="premium-active-banner">
               <SparkGlyph size={18} animated={false} />
               <Text style={s.bannerText}>You’re already on Premium. Enjoy unlimited Sparks!</Text>
+            </View>
+          ) : null}
+          {reason === "unverified" ? (
+            <View style={s.banner} testID="premium-unverified-banner">
+              <Ionicons name="time-outline" size={20} color={colors.onInfo} />
+              <Text style={s.bannerText}>Your subscription is still being confirmed with the store. Tap Restore Purchases below; if it keeps happening, contact support.</Text>
             </View>
           ) : null}
           {!user ? (
@@ -143,15 +158,21 @@ export default function Premium() {
               <Text style={s.unavailableText}>Subscription options are unavailable right now. Please try again later.</Text>
             </View>
           ) : null}
-          {__DEV__ ? <Text style={s.simulated}>Preview mode: purchases are simulated via the RevenueCat Test Store.</Text> : null}
-          <Pressable testID="premium-restore-button" onPress={doRestore} disabled={isRestoring} style={{ minHeight: 44, justifyContent: "center" }}>
+          {priceString ? (
+            <Text style={s.simulated} testID="premium-renewal-terms">
+              {`Payment is charged to your ${Platform.OS === "ios" ? "Apple ID" : "Google Play"} account${trial ? " when the free trial ends" : " at confirmation"}. The subscription renews automatically at ${priceString} per month unless cancelled at least 24 hours before the end of the current period. Manage or cancel anytime in your ${Platform.OS === "ios" ? "App Store" : "Google Play"} account settings.`}
+            </Text>
+          ) : null}
+          <LegalLinks prefix="By subscribing you agree to our" />
+          {rcUsingTestStore ? <Text style={s.simulated}>Preview mode: purchases are simulated via the RevenueCat Test Store.</Text> : null}
+          <Pressable testID="premium-restore-button" onPress={doRestore} disabled={isRestoring || !rcEnabled} style={{ minHeight: 44, justifyContent: "center" }}>
             <Text style={[s.simulated, { color: colors.brandPrimary, fontWeight: "700" }]}>{isRestoring ? "Restoring…" : "Restore Purchases"}</Text>
           </Pressable>
         </View>
       </ScrollView>
       <StickyFooter>
         <View style={{ gap: spacing.sm }}>
-          <Button title={isPremium ? "You're Premium ✨" : `Start Premium — ${trialDays} days free`} testID="start-premium-button" disabled={!pkg || !user || !identityReady || isPremium} loading={isPurchasing} onPress={() => setConfirm(true)} />
+          <Button title={isPremium ? "You're Premium ✨" : trial ? `Start your ${trial} free trial` : priceString ? `Subscribe — ${priceString}/month` : "Subscribe"} testID="start-premium-button" disabled={!pkg || !user || !identityReady || isPremium || checkingTrial} loading={isPurchasing} onPress={() => setConfirm(true)} />
           <Button title="Maybe Later" variant="ghost" testID="maybe-later-button" onPress={close} />
         </View>
       </StickyFooter>
@@ -160,7 +181,7 @@ export default function Premium() {
         <Pressable style={s.modalBg} onPress={() => setConfirm(false)}>
           <Pressable style={[s.modalCard, { paddingBottom: Math.max(insets.bottom, spacing.lg) + spacing.md }]} onPress={() => {}} testID="purchase-confirm-sheet">
             <Text style={s.modalTitle}>Start Date Spark Premium?</Text>
-            <Text style={s.modalText}>{pkg?.product.title ?? "Premium Monthly"} · {priceString}/month after your {trialDays}-day free trial.{__DEV__ ? " This is a simulated Test Store purchase." : ""}</Text>
+            <Text style={s.modalText}>{pkg?.product.title ?? "Premium Monthly"} · {trial ? `${trial} free, then ${priceString}/month` : `${priceString}/month`}, renews automatically until cancelled.{rcUsingTestStore ? " This is a simulated Test Store purchase." : ""}</Text>
             <Button title="Confirm" testID="purchase-confirm-button" onPress={doPurchase} />
             <Button title="Cancel" variant="ghost" testID="purchase-cancel-button" onPress={() => setConfirm(false)} />
           </Pressable>
@@ -168,4 +189,19 @@ export default function Premium() {
       </Modal>
     </View>
   );
+}
+
+/** Trial text for THIS user (eligibility checked with StoreKit on iOS). */
+function useTrialOffer(pkg: PurchasesPackage | undefined): { trial: string | null; checking: boolean } {
+  const intro = pkg?.product.introPrice;
+  const productId = pkg?.product.identifier;
+  const eligibility = useQuery({
+    queryKey: ["revenuecat", "intro-eligibility", productId],
+    queryFn: () => Purchases.checkTrialOrIntroductoryPriceEligibility([productId!]),
+    enabled: Platform.OS === "ios" && rcEnabled && !!productId && !!intro,
+    staleTime: 300 * 1000,
+  });
+  const eligible = eligibility.data?.[productId!]?.status === Purchases.INTRO_ELIGIBILITY_STATUS.INTRO_ELIGIBILITY_STATUS_ELIGIBLE;
+  // While StoreKit is still answering, the terms on screen aren't final yet: hold the purchase button.
+  return { trial: trialLabel(intro, Platform.OS, eligible), checking: eligibility.isLoading };
 }

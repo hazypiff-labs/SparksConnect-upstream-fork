@@ -16,7 +16,7 @@ import { durationLabel, transportLabel } from "@/src/plan";
 import { computeScheduledAt, formatScheduled } from "@/src/schedule";
 import { useSession } from "@/src/session";
 import { fonts, makeStyles, radius, spacing, useTheme } from "@/src/theme";
-import { useWizard } from "@/src/wizard";
+import { type Draft, useWizard } from "@/src/wizard";
 
 const useStyles = makeStyles((c) => ({
   root: { flex: 1, backgroundColor: c.surface },
@@ -53,47 +53,52 @@ export default function Results() {
   const scheduled = computeScheduledAt(draft.dateLabel, draft.timeLabel, draft.customDate);
   const scheduledIso = scheduled ? scheduled.toISOString() : null;
 
+  // The request is built from the draft passed to mutate(), never from a render-time closure, so "Fix" buttons
+  // that change the draft and regenerate immediately send the NEW settings (audit M9).
+  const scheduledFor = (d: Draft) => computeScheduledAt(d.dateLabel, d.timeLabel, d.customDate)?.toISOString() ?? null;
   const generate = useMutation({
-    mutationFn: () =>
+    mutationFn: (d: Draft) =>
       api<{ sparks: Spark[]; usage: { used: number; limit: number } }>("/sparks/generate", {
         method: "POST",
+        timeoutMs: 120_000, // server deadline: Places + up to two 40 s Claude attempts
         json: {
-          relationship_type: draft.relationship,
-          vibes: draft.vibes,
-          budget: draft.budget,
-          distance: draft.distance,
-          location: draft.location,
-          exclude_titles: draft.seenTitles,
-          occasion: draft.occasion,
-          surprise: draft.surprise,
+          relationship_type: d.relationship,
+          vibes: d.vibes,
+          budget: d.budget,
+          distance: d.distance,
+          location: d.location,
+          exclude_titles: d.seenTitles,
+          occasion: d.occasion,
+          surprise: d.surprise,
           // Experience Profiles: only sent for non-Couple profiles so the original dating request is byte-for-byte unchanged
-          ...(draft.experienceType && draft.experienceType !== "couple" ? { experience_type: draft.experienceType } : {}),
+          ...(d.experienceType && d.experienceType !== "couple" ? { experience_type: d.experienceType } : {}),
           // Experience Builder: only the inputs the user actually supplied
-          ...(draft.surpriseMe ? { surprise_me: true } : {}),
-          ...(draft.partySize != null ? { party_size: draft.partySize } : {}),
-          ...(draft.budgetAmount != null ? { budget_amount: draft.budgetAmount } : {}),
-          ...(draft.durationHours != null ? { duration_hours: draft.durationHours } : {}),
-          ...(draft.interests.length ? { interests: draft.interests } : {}),
-          ...(draft.transport ? { transport: draft.transport } : {}),
-          ...(draft.dateLabel ? { date_label: draft.dateLabel === "Choose a Date" ? draft.customDate || null : draft.dateLabel } : {}),
-          ...(draft.timeLabel ? { time_label: draft.timeLabel } : {}),
-          ...(scheduledIso ? { scheduled_at: scheduledIso } : {}),
+          ...(d.surpriseMe ? { surprise_me: true } : {}),
+          ...(d.partySize != null ? { party_size: d.partySize } : {}),
+          ...(d.budgetAmount != null ? { budget_amount: d.budgetAmount } : {}),
+          ...(d.durationHours != null ? { duration_hours: d.durationHours } : {}),
+          ...(d.interests.length ? { interests: d.interests } : {}),
+          ...(d.transport ? { transport: d.transport } : {}),
+          ...(d.dateLabel ? { date_label: d.dateLabel === "Choose a Date" ? d.customDate || null : d.dateLabel } : {}),
+          ...(d.timeLabel ? { time_label: d.timeLabel } : {}),
+          ...(scheduledFor(d) ? { scheduled_at: scheduledFor(d) } : {}),
         },
       }),
-    onSuccess: (data) => {
+    onSuccess: (data, d) => {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-      update({ results: data.sparks, usage: data.usage, seenTitles: [...draft.seenTitles, ...data.sparks.map((x) => x.title)] });
+      update({ results: data.sparks, usage: data.usage, seenTitles: [...d.seenTitles, ...data.sparks.map((x) => x.title)] });
       queryClient.invalidateQueries({ queryKey: ["sparks"] });
     },
     onError: (err: ApiError) => {
-      if (err.status === 402 && !isPremium) router.push({ pathname: "/premium", params: { reason: "limit" } });
+      // A subscriber who still gets 402 has a purchase the server hasn't verified yet (webhook delay / restore needed).
+      if (err.status === 402) router.push({ pathname: "/premium", params: { reason: isPremium ? "unverified" : "limit" } });
     },
   });
 
   useEffect(() => {
     if (!started.current && draft.results.length === 0 && draft.relationship) {
       started.current = true;
-      generate.mutate();
+      generate.mutate(draft);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -117,9 +122,10 @@ export default function Results() {
     ...(draft.transport ? [{ key: "transport", icon: "navigate" as const, text: transportLabel(draft.transport) }] : []),
   ];
 
-  const fix = (patch: Partial<typeof draft>) => {
+  const fix = (patch: Partial<Draft>) => {
+    const next = { ...draft, ...patch, results: [] };
     update({ ...patch, results: [] });
-    setTimeout(() => generate.mutate(), 0);
+    generate.mutate(next);
   };
 
   return (
@@ -170,7 +176,7 @@ export default function Results() {
               { label: "Lower My Budget", test: "fix-budget", action: () => fix({ budget: draft.budget === "free" ? "free" : "under25" }) },
               { label: "Increase Distance", test: "fix-distance", action: () => fix({ distance: draft.distance === "5" ? "10" : draft.distance === "10" ? "25" : "anywhere" }) },
               { label: "Try a Different Vibe", test: "fix-vibe", action: () => router.replace("/create/vibe") },
-              { label: "Try Again", test: "fix-retry", action: () => generate.mutate() },
+              { label: "Try Again", test: "fix-retry", action: () => generate.mutate(draft) },
             ].map((f) => (
               <Pressable key={f.label} testID={f.test} style={s.fix} onPress={f.action}>
                 <Text style={s.fixText}>{f.label}</Text>
@@ -202,7 +208,7 @@ export default function Results() {
             ))}
           </ScrollView>
           <StickyFooter>
-            <Button title="Give Me Different Ideas" variant="secondary" testID="different-ideas-button" onPress={() => generate.mutate()} icon={<Ionicons name="refresh" size={18} color={colors.onBrandTertiary} />} />
+            <Button title="Give Me Different Ideas" variant="secondary" testID="different-ideas-button" onPress={() => generate.mutate(draft)} icon={<Ionicons name="refresh" size={18} color={colors.onBrandTertiary} />} />
           </StickyFooter>
         </>
       )}

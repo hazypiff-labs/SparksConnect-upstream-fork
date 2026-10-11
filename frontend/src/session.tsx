@@ -1,33 +1,12 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { Platform } from "react-native";
-import * as Linking from "expo-linking";
-import * as WebBrowser from "expo-web-browser";
-import { router } from "expo-router";
 import Purchases from "react-native-purchases";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { api, getToken, setPremiumFlag, setToken, track, type User } from "@/src/api";
+import { ApiError, api, getToken, rotateGuestId, setPremiumFlag, setToken, setUnauthorizedHandler, track, type User } from "@/src/api";
 import { rcEnabled, useSubscription } from "@/src/revenuecat";
+import { storage } from "@/src/utils/storage";
 
-WebBrowser.maybeCompleteAuthSession();
-
-const exchangedSessionIds = new Set<string>();
-
-function extractSessionId(url: string | null | undefined): string | null {
-  if (!url) return null;
-  const m = url.match(/[?#&]session_id=([^&#]+)/);
-  return m ? decodeURIComponent(m[1]) : null;
-}
-
-function stripSessionIdFromWebUrl() {
-  if (Platform.OS !== "web" || typeof window === "undefined") return;
-  const clean = (s: string, lead: string) => {
-    const parts = s.replace(/^[?#]/, "").split("&").filter((p) => p && !p.startsWith("session_id="));
-    return parts.length ? lead + parts.join("&") : "";
-  };
-  const url = window.location.pathname + clean(window.location.search, "?") + clean(window.location.hash, "#");
-  window.history.replaceState(window.history.state, "", url);
-}
+const USER_CACHE_KEY = "datespark_user_cache";
 
 type Session = {
   user: User | null;
@@ -37,9 +16,12 @@ type Session = {
   identityError: string | null;
   login: (email: string, password: string) => Promise<User>;
   signup: (name: string, email: string, password: string) => Promise<User>;
-  appleLogin: (identityToken: string, name: string | null, email: string | null) => Promise<User>;
-  googleLogin: () => Promise<void>;
-  googleBusy: boolean;
+  appleLogin: (identityToken: string, name: string | null, authorizationCode: string | null) => Promise<User>;
+  googleLogin: (idToken: string) => Promise<User>;
+  requestEmailCode: () => Promise<void>;
+  confirmEmail: (code: string) => Promise<User>;
+  forgotPassword: (email: string) => Promise<void>;
+  resetPassword: (email: string, code: string, newPassword: string) => Promise<User>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
   deleteAccount: () => Promise<void>;
@@ -51,7 +33,6 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [ready, setReady] = useState(false);
   const [identityError, setIdentityError] = useState<string | null>(null);
-  const [googleBusy, setGoogleBusy] = useState(false);
   const rcIdentityRef = useRef<string | null>(null);
   const { isSubscribed, isTrial, expirationDate } = useSubscription();
   const queryClient = useQueryClient();
@@ -63,19 +44,30 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     setPremiumFlag(isPremium);
   }, [isPremium]);
 
+  const rememberUser = useCallback(async (u: User | null) => {
+    setUser(u);
+    await storage.setItem(USER_CACHE_KEY, u ? JSON.stringify(u) : null);
+  }, []);
+
   const refresh = useCallback(async () => {
     const token = await getToken();
     if (!token) {
-      setUser(null);
+      await rememberUser(null);
       return;
     }
     try {
-      setUser(await api<User>("/auth/me"));
-    } catch {
-      await setToken(null);
-      setUser(null);
+      await rememberUser(await api<User>("/auth/me"));
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) {
+        await setToken(null);
+        await rememberUser(null);
+      } else {
+        // Offline or a server hiccup: stay signed in with the last known profile (audit H6).
+        const cached = await storage.getItem<string | null>(USER_CACHE_KEY, null);
+        setUser(cached ? (JSON.parse(cached) as User) : null);
+      }
     }
-  }, []);
+  }, [rememberUser]);
 
   // Bind RevenueCat identity to the backend user id on every auth path.
   useEffect(() => {
@@ -110,77 +102,44 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
   const afterAuth = async (data: { access_token: string; user: User }) => {
     await setToken(data.access_token);
-    setUser(data.user);
+    await rememberUser(data.user);
     queryClient.invalidateQueries({ queryKey: ["sparks"] });
     return data.user;
   };
 
-  // Exchange an Emergent Google Auth session_id (one-time) for our own JWT.
-  const exchangeSessionId = useCallback(async (sessionId: string): Promise<boolean> => {
-    if (exchangedSessionIds.has(sessionId)) return false;
-    exchangedSessionIds.add(sessionId);
-    try {
-      await afterAuth(await api("/auth/session", { method: "POST", json: { session_id: sessionId } }));
-      stripSessionIdFromWebUrl();
-      router.replace("/(tabs)/home");
-      return true;
-    } catch (e) {
-      setIdentityError(e instanceof Error ? e.message : "Google sign-in failed");
-      return false;
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const logout = useCallback(async () => {
+    await setToken(null);
+    await rememberUser(null);
+    await rotateGuestId();
+    queryClient.removeQueries({ queryKey: ["sparks"] });
+  }, [queryClient, rememberUser]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      let sid: string | null = null;
-      if (Platform.OS === "web" && typeof window !== "undefined") {
-        sid = extractSessionId(window.location.hash) ?? extractSessionId(window.location.search);
-      } else {
-        sid = extractSessionId(await Linking.getInitialURL());
-      }
-      if (sid) await exchangeSessionId(sid);
-      else await refresh();
+      await refresh();
       if (!cancelled) {
         setReady(true);
         track("app_opened");
       }
     })();
-    const sub = Linking.addEventListener("url", ({ url }) => {
-      const sid = extractSessionId(url);
-      if (sid) exchangeSessionId(sid);
-    });
     return () => {
       cancelled = true;
-      sub.remove();
     };
-  }, [refresh, exchangeSessionId]);
+  }, [refresh]);
 
-  const googleLogin = useCallback(async () => {
-    track("signup_started", { provider: "google" });
-    if (Platform.OS === "web" && typeof window !== "undefined") {
-      const redirectUrl = window.location.origin + "/";
-      window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
-      return;
-    }
-    setGoogleBusy(true);
-    let captured: string | null = null;
-    const sub = Linking.addEventListener("url", ({ url }) => {
-      captured = captured ?? url;
+  // The server rejected our token mid-session (expired, revoked, account deleted): sign out cleanly.
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      logout();
     });
-    try {
-      const redirectUrl = Linking.createURL("");
-      const authUrl = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
-      const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUrl);
-      const url = (result.type === "success" ? result.url : null) ?? captured ?? (await Linking.getInitialURL());
-      const sid = extractSessionId(url);
-      if (sid) await exchangeSessionId(sid);
-      else if (result.type !== "cancel" && result.type !== "dismiss") setIdentityError("Google sign-in didn’t complete");
-    } finally {
-      sub.remove();
-      setGoogleBusy(false);
-    }
-  }, [exchangeSessionId]);
+    return () => setUnauthorizedHandler(null);
+  }, [logout]);
+
+  const googleLogin = useCallback(async (idToken: string) => {
+    track("signup_started", { provider: "google" });
+    return afterAuth(await api("/auth/google", { method: "POST", json: { id_token: idToken } }));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const login = useCallback(async (email: string, password: string) => afterAuth(await api("/auth/login", { method: "POST", json: { email, password } })), []); // eslint-disable-line react-hooks/exhaustive-deps
   const signup = useCallback(async (name: string, email: string, password: string) => {
@@ -188,16 +147,26 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     return afterAuth(await api("/auth/signup", { method: "POST", json: { name, email, password } }));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const appleLogin = useCallback(async (identityToken: string, name: string | null, email: string | null) => {
+  const appleLogin = useCallback(async (identityToken: string, name: string | null, authorizationCode: string | null) => {
     track("signup_started", { provider: "apple" });
-    return afterAuth(await api("/auth/apple", { method: "POST", json: { identity_token: identityToken, name, email } }));
+    return afterAuth(await api("/auth/apple", { method: "POST", json: { identity_token: identityToken, name, authorization_code: authorizationCode } }));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const logout = useCallback(async () => {
-    await setToken(null);
-    setUser(null);
-    queryClient.invalidateQueries({ queryKey: ["sparks"] });
-  }, [queryClient]);
+  const requestEmailCode = useCallback(async () => {
+    await api("/auth/verify-email/request", { method: "POST" });
+  }, []);
+
+  const confirmEmail = useCallback(async (code: string) => {
+    const u = await api<User>("/auth/verify-email/confirm", { method: "POST", json: { code } });
+    await rememberUser(u);
+    return u;
+  }, [rememberUser]);
+
+  const forgotPassword = useCallback(async (email: string) => {
+    await api("/auth/password/forgot", { method: "POST", json: { email } });
+  }, []);
+
+  const resetPassword = useCallback(async (email: string, code: string, newPassword: string) => afterAuth(await api("/auth/password/reset", { method: "POST", json: { email, code, new_password: newPassword } })), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const deleteAccount = useCallback(async () => {
     await api("/auth/account", { method: "DELETE" });
@@ -205,7 +174,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   }, [logout]);
 
   return (
-    <Ctx.Provider value={{ user, ready, isPremium, isAdmin, identityError, login, signup, appleLogin, googleLogin, googleBusy, logout, refresh, deleteAccount }}>
+    <Ctx.Provider value={{ user, ready, isPremium, isAdmin, identityError, login, signup, appleLogin, googleLogin, requestEmailCode, confirmEmail, forgotPassword, resetPassword, logout, refresh, deleteAccount }}>
       {children}
     </Ctx.Provider>
   );

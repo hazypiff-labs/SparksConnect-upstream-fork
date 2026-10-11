@@ -1,13 +1,15 @@
 import React, { useState } from "react";
-import { Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { Linking, Modal, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@/src/api";
+import { LegalLinks } from "@/src/components/LegalLinks";
 import { Button, Chip, SparkGlyph, useToast } from "@/src/components/ui";
 import { VIBES } from "@/src/constants";
+import { useSubscription } from "@/src/revenuecat";
 import { useSession } from "@/src/session";
 import { fonts, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
@@ -45,6 +47,7 @@ export default function Profile() {
   const toast = useToast();
   const queryClient = useQueryClient();
   const { user, isPremium, isAdmin, logout, deleteAccount } = useSession();
+  const { isSubscribed, managementURL } = useSubscription();
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const prefs = useQuery({ queryKey: ["preferences", user?.id ?? "guest"], queryFn: () => api<{ favorite_vibes: string[] }>("/users/me/preferences") });
@@ -78,6 +81,13 @@ export default function Profile() {
           <View style={s.badge} testID="profile-subscription-status">
             <Text style={s.badgeText}>{statusLabel.toUpperCase()}</Text>
           </View>
+          {user && !user.email_verified && !user.email.endsWith(".invalid") ? (
+            <Pressable testID="profile-verify-email" style={s.row} onPress={() => router.push("/verify-email")}>
+              <Ionicons name="mail-unread-outline" size={20} color={colors.brandPrimary} />
+              <Text style={s.rowText}>Confirm your email</Text>
+              <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+            </Pressable>
+          ) : null}
           {!user ? (
             <View style={{ gap: spacing.sm }}>
               <Button title="Create Account ✨" testID="profile-signup-button" onPress={() => router.push({ pathname: "/auth", params: { mode: "signup" } })} />
@@ -111,7 +121,7 @@ export default function Profile() {
         {!isPremium ? (
           <Pressable testID="profile-premium-card" style={s.premiumCard} onPress={() => router.push("/premium")}>
             <Text style={s.premiumTitle}>Date Spark Premium ✨</Text>
-            <Text style={s.premiumSub}>Unlimited Sparks, richer itineraries, surprise mode. Free for 2 weeks.</Text>
+            <Text style={s.premiumSub}>Unlimited Sparks, richer itineraries, surprise mode.</Text>
             <Button title="Take Your Spark Further" variant="primary" testID="profile-premium-button" onPress={() => router.push("/premium")} />
           </Pressable>
         ) : null}
@@ -136,6 +146,7 @@ export default function Profile() {
             </Pressable>
           </View>
         ) : null}
+        <LegalLinks />
         <Text style={[s.meta, { textAlign: "center" }]}>Date Spark ✨ · Find something. Spark a plan. Make a memory.</Text>
       </ScrollView>
 
@@ -144,6 +155,13 @@ export default function Profile() {
           <Pressable style={[s.modalCard, { paddingBottom: Math.max(insets.bottom, spacing.lg) + spacing.md }]} onPress={() => {}} testID="delete-confirm-sheet">
             <Text style={s.modalTitle}>Delete your account?</Text>
             <Text style={s.modalText}>Your profile and Sparks will be removed. This can’t be undone from the app.</Text>
+            {/* Always shown: the store keeps billing regardless of what this device currently knows (audit C3). */}
+            <Text style={[s.modalText, isSubscribed && s.danger]} testID="delete-subscription-warning">
+              {isSubscribed ? "You have an active subscription. " : "If you subscribed to Premium: "}deleting your account does not cancel it. Cancel in your {Platform.OS === "ios" ? "App Store" : "Google Play"} settings, or you’ll keep being charged.
+            </Text>
+            {Platform.OS !== "web" ? (
+              <Button title="Manage subscription" variant="secondary" testID="delete-manage-subscription" onPress={() => Linking.openURL(managementURL ?? (Platform.OS === "ios" ? "https://apps.apple.com/account/subscriptions" : "https://play.google.com/store/account/subscriptions")).catch(() => {})} />
+            ) : null}
             <Button title="Delete account" variant="inverse" testID="delete-confirm-button" onPress={async () => { setConfirmDelete(false); try { await deleteAccount(); toast.show("Account deleted", "info"); } catch (e: any) { toast.show(e.message, "error"); } }} />
             <Button title="Keep my account" variant="ghost" testID="delete-cancel-button" onPress={() => setConfirmDelete(false)} />
           </Pressable>

@@ -6,8 +6,10 @@ import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { KeyboardAwareScrollView, KeyboardStickyView } from "react-native-keyboard-controller";
 
+import { LegalLinks } from "@/src/components/LegalLinks";
 import { Button, SparkGlyph, StickyFooter, useToast } from "@/src/components/ui";
 import { useSession } from "@/src/session";
+import { useGoogleSignIn } from "@/src/useGoogleSignIn";
 import { fonts, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
 const useStyles = makeStyles((c) => ({
@@ -39,7 +41,7 @@ export default function Auth() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const toast = useToast();
-  const { login, signup, appleLogin, googleLogin, googleBusy, identityError } = useSession();
+  const { login, signup, appleLogin, identityError } = useSession();
   const [appleAvailable, setAppleAvailable] = useState(false);
   const [appleBusy, setAppleBusy] = useState(false);
   useEffect(() => {
@@ -55,10 +57,9 @@ export default function Auth() {
       });
       if (!credential.identityToken) throw new Error("Apple didn’t return a sign-in token");
       const fullName = [credential.fullName?.givenName, credential.fullName?.familyName].filter(Boolean).join(" ") || null;
-      const user = await appleLogin(credential.identityToken, fullName, credential.email ?? null);
+      const user = await appleLogin(credential.identityToken, fullName, credential.authorizationCode ?? null);
       toast.show(`Welcome, ${user.name.split(" ")[0]} ✨`, "success");
-      if (router.canGoBack()) router.back();
-      else router.replace("/(tabs)/home");
+      leave();
     } catch (e: any) {
       if (e?.code === "ERR_REQUEST_CANCELED") return;
       setError(e?.message ?? "Apple sign-in failed");
@@ -72,18 +73,29 @@ export default function Auth() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const leave = () => {
+    if (router.canGoBack()) router.back();
+    else router.replace("/(tabs)/home");
+  };
+  const google = useGoogleSignIn(() => {
+    toast.show("Welcome ✨", "success");
+    leave();
+  }, setError);
+  // One sign-in at a time: concurrent flows race on the stored session.
+  const anyBusy = busy || appleBusy || google.busy;
 
   const submit = async () => {
     setError(null);
     if (!email.trim() || !password) return setError("Email and password are required");
     if (mode === "signup" && !name.trim()) return setError("Tell us your name");
     if (mode === "signup" && password.length < 8) return setError("Password must be at least 8 characters");
+    if (anyBusy) return;
     setBusy(true);
     try {
       const user = mode === "login" ? await login(email.trim(), password) : await signup(name.trim(), email.trim(), password);
-      toast.show(mode === "login" ? `Welcome back, ${user.name.split(" ")[0]} ✨` : "Account created — your Sparks are safe ✨", "success");
-      if (router.canGoBack()) router.back();
-      else router.replace("/(tabs)/home");
+      toast.show(mode === "login" ? `Welcome back, ${user.name.split(" ")[0]} ✨` : "Account created — check your email for a code ✨", "success");
+      if (mode === "signup" && !user.email_verified) router.replace("/verify-email");
+      else leave();
     } catch (e: any) {
       setError(e.message ?? "Something went wrong");
     } finally {
@@ -124,6 +136,11 @@ export default function Auth() {
         <View>
           <Text style={s.label}>Password</Text>
           <TextInput testID="auth-password-input" style={s.input} value={password} onChangeText={setPassword} placeholder={mode === "signup" ? "At least 8 characters" : "Your password"} placeholderTextColor={colors.muted} secureTextEntry textContentType={mode === "signup" ? "newPassword" : "password"} returnKeyType="go" onSubmitEditing={submit} />
+          {mode === "login" ? (
+            <Pressable testID="auth-forgot" onPress={() => router.push({ pathname: "/forgot", params: { email: email.trim() } })} hitSlop={8} style={{ alignSelf: "flex-end", marginTop: 8 }}>
+              <Text style={s.dividerText}>Forgot password?</Text>
+            </Pressable>
+          ) : null}
         </View>
         {error ? <Text style={s.error} testID="auth-error">{error}</Text> : null}
         {identityError && !error ? <Text style={s.error} testID="auth-identity-error">{identityError}</Text> : null}
@@ -133,14 +150,20 @@ export default function Auth() {
             <Text style={s.dividerText}>or continue with</Text>
             <View style={s.dividerLine} />
           </View>
-          <Button
-            title="Continue with Google"
-            variant="inverse"
-            testID="google-signin-button"
-            loading={googleBusy}
-            onPress={() => googleLogin().catch((e: Error) => setError(e.message))}
-            icon={<Ionicons name="logo-google" size={18} color={colors.onSurfaceInverse} />}
-          />
+          {google.ready ? (
+            <Button
+              title="Continue with Google"
+              variant="inverse"
+              testID="google-signin-button"
+              loading={google.busy}
+              disabled={anyBusy}
+              onPress={() => {
+                setError(null);
+                google.start();
+              }}
+              icon={<Ionicons name="logo-google" size={18} color={colors.onSurfaceInverse} />}
+            />
+          ) : null}
           {appleAvailable ? (
             <AppleAuthentication.AppleAuthenticationButton
               testID="apple-signin-button"
@@ -148,11 +171,12 @@ export default function Auth() {
               buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
               cornerRadius={26}
               style={[s.appleButton, appleBusy && { opacity: 0.6 }]}
-              onPress={appleBusy ? () => {} : signInWithApple}
+              onPress={anyBusy ? () => {} : signInWithApple}
             />
           ) : null}
         </View>
         <Text style={s.note}>{appleAvailable ? "" : "Apple sign-in is available on iPhone. "}We only store what’s needed to keep your Sparks.</Text>
+        <LegalLinks prefix={mode === "signup" ? "By creating an account you agree to our" : "See our"} />
       </KeyboardAwareScrollView>
       <KeyboardStickyView>
         <StickyFooter>

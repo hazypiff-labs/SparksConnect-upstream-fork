@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { Pressable, Switch, Text, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -67,20 +67,21 @@ export default function Admin() {
   const [form, setForm] = useState({ free_spark_limit: "", premium_price: "", trial_days: "", promo_message: "", guidance: "", featured: "" });
   const [features, setFeatures] = useState<Record<string, boolean>>({});
   const [limits, setLimits] = useState<Record<string, string>>({});
-  useEffect(() => {
-    if (config.data) {
-      setFeatures(config.data.features ?? {});
-      setLimits(Object.fromEntries(Object.entries(config.data.limits ?? {}).map(([k, v]) => [k, String(v)])));
-      setForm({
-        free_spark_limit: String(config.data.free_spark_limit),
-        premium_price: String(config.data.premium_price),
-        trial_days: String(config.data.trial_days),
-        promo_message: config.data.promo_message ?? "",
-        guidance: config.data.ai_settings?.guidance ?? "",
-        featured: (config.data.featured_experiences ?? []).map((f: any) => `${f.title} | ${f.tagline} | ${f.vibe}`).join("\n"),
-      });
-    }
-  }, [config.data]);
+  // Re-seed the form whenever fresh config arrives (state adjusted during render, not in an effect).
+  const [seededFrom, setSeededFrom] = useState<unknown>(null);
+  if (config.data && seededFrom !== config.data) {
+    setSeededFrom(config.data);
+    setFeatures(config.data.features ?? {});
+    setLimits(Object.fromEntries(Object.entries(config.data.limits ?? {}).map(([k, v]) => [k, String(v)])));
+    setForm({
+      free_spark_limit: String(config.data.free_spark_limit),
+      premium_price: String(config.data.premium_price),
+      trial_days: String(config.data.trial_days),
+      promo_message: config.data.promo_message ?? "",
+      guidance: config.data.ai_settings?.guidance ?? "",
+      featured: (config.data.featured_experiences ?? []).map((f: any) => `${f.title} | ${f.tagline} | ${f.vibe}`).join("\n"),
+    });
+  }
 
   const save = useMutation({
     mutationFn: () =>

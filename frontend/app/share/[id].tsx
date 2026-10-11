@@ -15,7 +15,7 @@ import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { api, type Spark } from "@/src/api";
 import { addSparkToCalendar } from "@/src/calendar";
 import { Button, Chip, SparkGlyph, StickyFooter, useToast } from "@/src/components/ui";
-import { DATE_OPTIONS, IMAGES, TIME_OPTIONS } from "@/src/constants";
+import { DATE_OPTIONS, IMAGES, SHARE_BASE_URL, TIME_OPTIONS } from "@/src/constants";
 import { computeScheduledAt, formatScheduled } from "@/src/schedule";
 import { fonts, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
@@ -51,14 +51,25 @@ export default function SparkIt() {
   const queryClient = useQueryClient();
 
   const spark = useQuery({ queryKey: ["sparks", id], queryFn: () => api<Spark>(`/sparks/${id}`), enabled: !!id });
-  const [dateChoice, setDateChoice] = useState<string | null>(spark.data?.date_label ?? null);
+  const [dateChoice, setDateChoice] = useState<string | null>(null);
   const [customDate, setCustomDate] = useState("");
-  const [time, setTime] = useState<string | null>(spark.data?.time_label ?? null);
+  const [time, setTime] = useState<string | null>(null);
+  // Opened from a deep link the spark isn't loaded at first render: seed the pickers once it arrives (audit M9).
+  const [seededFrom, setSeededFrom] = useState<string | null>(null);
+  if (spark.data && seededFrom !== spark.data.id) {
+    setSeededFrom(spark.data.id);
+    const saved = spark.data.date_label;
+    const known = !saved || (DATE_OPTIONS as readonly string[]).includes(saved);
+    setDateChoice(known ? saved : "Choose a Date");
+    setCustomDate(known ? "" : saved ?? "");
+    setTime(spark.data.time_label ?? null);
+  }
 
   const dateLabel = dateChoice === "Choose a Date" ? customDate.trim() || null : dateChoice;
   const scheduledAt = computeScheduledAt(dateLabel, time, customDate);
   const scheduledIso = scheduledAt ? scheduledAt.toISOString() : null;
-  const shareUrl = Linking.createURL(`spark/${id}`);
+  // Web link when the app has a share domain (works for people without the app — audit H7), else the app scheme.
+  const shareUrl = SHARE_BASE_URL ? `${SHARE_BASE_URL}/s/${id}` : Linking.createURL(`spark/${id}`);
   const [calendarBusy, setCalendarBusy] = useState(false);
 
   const addToCalendar = async () => {

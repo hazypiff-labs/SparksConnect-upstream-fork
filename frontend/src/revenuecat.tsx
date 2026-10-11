@@ -10,22 +10,26 @@ const REVENUECAT_ANDROID_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_AP
 
 export const REVENUECAT_ENTITLEMENT_IDENTIFIER = "pro";
 
-export const rcEnabled = Platform.OS !== "web" || __DEV__;
-
-function getRevenueCatApiKey() {
-  if (!REVENUECAT_TEST_API_KEY || !REVENUECAT_IOS_API_KEY || !REVENUECAT_ANDROID_API_KEY) {
-    throw new Error("RevenueCat public API keys not found");
-  }
-  if (Platform.OS === "web" || __DEV__) return REVENUECAT_TEST_API_KEY;
+/** Only the key this build actually needs is required: the Test Store key in development / web preview, the
+ * platform key in a store build (a production build no longer breaks because the test key is absent — audit M8). */
+function getRevenueCatApiKey(): string | undefined {
+  if (__DEV__ && REVENUECAT_TEST_API_KEY) return REVENUECAT_TEST_API_KEY;
   if (Platform.OS === "ios") return REVENUECAT_IOS_API_KEY;
   if (Platform.OS === "android") return REVENUECAT_ANDROID_API_KEY;
-  return REVENUECAT_TEST_API_KEY;
+  return __DEV__ ? REVENUECAT_TEST_API_KEY : undefined;
 }
 
+export const rcEnabled = (Platform.OS !== "web" || __DEV__) && !!getRevenueCatApiKey();
+/** True when purchases go to RevenueCat's Test Store (simulated) rather than the real store. */
+export const rcUsingTestStore = rcEnabled && getRevenueCatApiKey() === REVENUECAT_TEST_API_KEY;
+
 export function initializeRevenueCat() {
-  if (!rcEnabled) return;
+  if (!rcEnabled) {
+    if (__DEV__) console.warn("RevenueCat disabled: no API key for this platform/build");
+    return;
+  }
   Purchases.setLogLevel(__DEV__ ? LOG_LEVEL.DEBUG : LOG_LEVEL.WARN);
-  Purchases.configure({ apiKey: getRevenueCatApiKey() });
+  Purchases.configure({ apiKey: getRevenueCatApiKey()! });
 }
 
 function useSubscriptionContext() {
@@ -56,20 +60,31 @@ function useSubscriptionContext() {
 
   const purchaseMutation = useMutation({
     mutationFn: async (packageToPurchase: PurchasesPackage) => {
-      const id = (await Purchases.getCustomerInfo()).originalAppUserId;
-      if (id.startsWith("$RCAnonymousID:")) throw new Error("identity_not_ready");
+      // The CURRENT app user id must be our backend user (Purchases.logIn), or the server can't attribute the purchase.
+      if (await Purchases.isAnonymous()) throw new Error("identity_not_ready");
       const { customerInfo } = await Purchases.purchasePackage(packageToPurchase);
       return customerInfo;
     },
   });
 
-  const restoreMutation = useMutation({ mutationFn: () => Purchases.restorePurchases() });
+  const restoreMutation = useMutation({
+    mutationFn: async () => {
+      // Restoring onto an anonymous RevenueCat id would attach the purchase to nobody the server knows (audit M8).
+      if (await Purchases.isAnonymous()) throw new Error("identity_not_ready");
+      return Purchases.restorePurchases();
+    },
+  });
 
   const entitlement = customerInfoQuery.data?.entitlements.active?.[REVENUECAT_ENTITLEMENT_IDENTIFIER];
   const isSubscribed = entitlement !== undefined;
   const isTrial = entitlement?.periodType === "TRIAL";
-  const originalAppUserId = customerInfoQuery.data?.originalAppUserId;
-  const identityReady = !!originalAppUserId && !originalAppUserId.startsWith("$RCAnonymousID:");
+  // Re-evaluated whenever customer info changes (the session stores the logIn() result there).
+  const anonymousQuery = useQuery({
+    queryKey: ["revenuecat", "is-anonymous", customerInfoQuery.dataUpdatedAt],
+    queryFn: () => Purchases.isAnonymous(),
+    enabled: rcEnabled,
+  });
+  const identityReady = anonymousQuery.data === false;
 
   return {
     customerInfo: customerInfoQuery.data,
@@ -77,6 +92,7 @@ function useSubscriptionContext() {
     isSubscribed,
     isTrial,
     expirationDate: entitlement?.expirationDate ?? null,
+    managementURL: customerInfoQuery.data?.managementURL ?? null,
     identityReady,
     isLoading: customerInfoQuery.isLoading || offeringsQuery.isLoading,
     purchase: purchaseMutation.mutateAsync,

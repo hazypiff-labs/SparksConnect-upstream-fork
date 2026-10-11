@@ -144,3 +144,13 @@ export function cardImage(index: number) {
 export function labelFor(list: { key: string; label: string }[], key: string | null | undefined) {
   return list.find((x) => x.key === key)?.label ?? key ?? "";
 }
+
+/** Legal links shown on the paywall, sign-up and profile (App Store 3.1.2 / 5.1.1). Set per build. */
+export const LEGAL = {
+  privacy: process.env.EXPO_PUBLIC_PRIVACY_URL ?? "",
+  // Apple's standard EULA unless the app publishes its own terms.
+  terms: process.env.EXPO_PUBLIC_TERMS_URL || "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/",
+};
+
+/** Public origin for invitation links, e.g. https://datespark.app (served by the backend: /s/<id> + app-link files). */
+export const SHARE_BASE_URL = (process.env.EXPO_PUBLIC_SHARE_BASE_URL ?? "").replace(/\/+$/, "");

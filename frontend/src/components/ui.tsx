@@ -64,8 +64,8 @@ export function Button({ title, variant = "primary", loading, icon, style, disab
         testID={testID}
         accessibilityRole="button"
         disabled={disabled || loading}
-        onPressIn={() => (scale.value = withTiming(0.97, { duration: 90 }))}
-        onPressOut={() => (scale.value = withTiming(1, { duration: 120 }))}
+        onPressIn={() => scale.set(withTiming(0.97, { duration: 90 }))}
+        onPressOut={() => scale.set(withTiming(1, { duration: 120 }))}
         onPress={(e) => {
           if (variant === "primary") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
           onPress?.(e);

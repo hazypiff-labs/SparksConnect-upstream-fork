@@ -99,8 +99,8 @@ export function Timeline({ activities, legs = [], enriched = false, showHours = 
                       {a.rating ? <Text style={s.meta}>★ {a.rating}</Text> : null}
                       {!a.verified ? <Text style={s.verify}>Verify details</Text> : null}
                     </View>
-                    {a.external_url ? (
-                      <Pressable testID={`itinerary-step-${i}-maps`} style={s.link} onPress={() => Linking.openURL(a.external_url!)}>
+                    {a.external_url && /^https:\/\//i.test(a.external_url) ? (
+                      <Pressable testID={`itinerary-step-${i}-maps`} style={s.link} onPress={() => Linking.openURL(a.external_url!).catch(() => {})}>
                         <Ionicons name="map" size={14} color={colors.brandPrimary} />
                         <Text style={s.linkText}>Open in Google Maps</Text>
                       </Pressable>
