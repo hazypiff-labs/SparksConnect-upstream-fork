@@ -86,3 +86,7 @@ android-sdk/
 credentials.json
 *.key
 .credentials
+
+# test server log
+backend/tests/.server.log
+!.env.example
